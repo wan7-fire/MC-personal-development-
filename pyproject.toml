@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mewcode"
+version = "0.1.0"
+description = "A minimal terminal LLM chat client"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=2.11",
+    "textual>=6.6",
+]
+
+[project.scripts]
+mewcode = "mewcode.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["mewcode*"]
+

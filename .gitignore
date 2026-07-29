@@ -1,0 +1,15 @@
+.python/
+.venv*/
+.superpowers/
+.workbuddy/
+.idea/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+dist/
+
+# Local secrets
+.env
+.env.*
+!.env.example

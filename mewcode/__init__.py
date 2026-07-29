@@ -1,0 +1,2 @@
+"""MewCode terminal chat."""
+

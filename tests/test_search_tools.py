@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mewcode.tools import Glob, Grep, ToolContext
+from zxcode.tools import Glob, Grep, ToolContext
 
 
 class SearchToolTests(unittest.IsolatedAsyncioTestCase):
@@ -14,6 +14,10 @@ class SearchToolTests(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    async def test_glob_description_names_ignored_directories(self):
+        for name in (".git", "node_modules", "vendor", ".idea", "__pycache__"):
+            self.assertIn(name, Glob.description)
 
     async def test_glob_ignores_directories_and_sorts_newest_first(self):
         old = self.root / "old.py"

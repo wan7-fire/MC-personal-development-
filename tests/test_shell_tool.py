@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mewcode.tools import Bash, ToolContext
+from zxcode.tools import Bash, ToolContext
 
 
 class ShellToolTests(unittest.IsolatedAsyncioTestCase):
@@ -12,6 +12,10 @@ class ShellToolTests(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    async def test_description_mentions_confirmation_for_non_read_only_commands(self):
+        self.assertIn("confirmation", Bash.description)
+        self.assertIn("read-only", Bash.description)
 
     async def test_read_only_command_runs_without_confirmation(self):
         confirmations = []

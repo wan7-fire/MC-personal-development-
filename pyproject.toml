@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mewcode"
+name = "zxcode"
 version = "0.1.0"
 description = "A minimal terminal LLM chat client"
 requires-python = ">=3.11"
@@ -13,8 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mewcode = "mewcode.__main__:main"
+zxcode = "zxcode.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["mewcode*"]
-
+include = ["zxcode*"]

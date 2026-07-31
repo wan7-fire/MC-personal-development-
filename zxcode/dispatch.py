@@ -72,8 +72,12 @@ class ToolDispatcher:
 
     # ── hooks ────────────────────────────────────────────────────────────
 
-    def _pre_hook(
-        self, call: ToolCall, config: AgentConfig, outcome: DispatchOutcome
+    async def _pre_hook(
+        self,
+        call: ToolCall,
+        context: ToolContext,
+        config: AgentConfig,
+        outcome: DispatchOutcome,
     ) -> ToolResult | None:
         """Return a result to short-circuit execution, or None to proceed."""
         tool = self.registry.get(call.name)
@@ -90,6 +94,25 @@ class ToolDispatcher:
                 error={"code": "plan_only_blocked", "message": PLAN_ONLY_MESSAGE},
                 metadata={"call_id": call.id},
             )
+        security = getattr(context, "security", None)
+        if security is not None:
+            blocked = await security.guard_call(
+                call.name, call.arguments, context, prompt=call.name == "Bash"
+            )
+            if blocked is not None:
+                reason = (
+                    blocked.error.get("message", "security blocked")
+                    if blocked.error
+                    else "security blocked"
+                )
+                outcome.blocked_calls.append(
+                    {
+                        "tool_name": call.name,
+                        "arguments": dict(call.arguments),
+                        "reason": reason,
+                    }
+                )
+                return blocked
         # 权限检查位（permission hook）：本章不实现具体规则，保留调用点。
         return None
 
@@ -110,7 +133,7 @@ class ToolDispatcher:
         tool = self.registry.get(call.name)
         tool_type = "read" if tool is None or tool.read_only else "write"
 
-        blocked = self._pre_hook(call, config, outcome)
+        blocked = await self._pre_hook(call, context, config, outcome)
         if blocked is not None:
             await self._emit_start(call, tool_type, turn)
             await self._emit_end(call, turn, 0, "error")

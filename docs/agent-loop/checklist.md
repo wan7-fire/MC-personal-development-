@@ -1,4 +1,4 @@
-# MewCode Agent 循环验收清单
+# ZXCode Agent 循环验收清单
 
 > 每一项都必须可勾选、可观测。测试命令统一为：
 > `.\.venv\Scripts\python.exe -m unittest discover -s tests -v`
@@ -7,7 +7,7 @@
 
 ## 一、事件类型与通道
 
-- [ ] `grep -o "\"[a-z_]*\"" mewcode/events.py` 能找到全部 11 个事件类型字面量：`user_message`、`thinking`、`text`、`tool_call_start`、`tool_call_end`、`tool_result`、`turn_end`、`final_reply`、`error`、`cancelled`、`loop_end`。
+- [ ] `grep -o "\"[a-z_]*\"" zxcode/events.py` 能找到全部 11 个事件类型字面量：`user_message`、`thinking`、`text`、`tool_call_start`、`tool_call_end`、`tool_result`、`turn_end`、`final_reply`、`error`、`cancelled`、`loop_end`。
 - [ ] `Event` 是冻结数据类：`from dataclasses import fields; Event(type="text").timestamp` 返回一个大于 `1.7e12` 的整数；对实例赋值 `e.turn = 1` 抛 `FrozenInstanceError`。
 - [ ] `Event(type="text", turn=2, data={"content":"你好"}).to_dict()` 经 `json.dumps(..., ensure_ascii=False)` 后包含 `"content": "你好"`（非 `你`）。
 - [ ] `EventChannel()` 默认 `maxsize` 为 `1000`：`EventChannel()._queue.maxsize == 1000`。
@@ -35,7 +35,7 @@
 - [ ] `AgentConfig()` 默认值：`max_turns == 20`、`plan_only is False`、`llm_timeout_seconds == 120.0`。
 - [ ] `LoopTerminatorConfig()` 默认值保持不变：`repeated_observation_limit == 3`、`repeated_error_limit == 2`、`no_progress_limit == 4`。
 - [ ] `AgentConfig().with_plan_only(True)` 返回新实例且原实例 `plan_only` 仍为 `False`。
-- [ ] `grep -o "repeated_observation\|repeated_error\|no_progress" mewcode/config.py` 返回 ≥3 条（额外终止原因已纳入枚举）。
+- [ ] `grep -o "repeated_observation\|repeated_error\|no_progress" zxcode/config.py` 返回 ≥3 条（额外终止原因已纳入枚举）。
 
 ## 五、工具批次调度与拦截位
 
@@ -48,8 +48,8 @@
 - [ ] `tool_call_end.data["duration_ms"]` 为非负整数；对一个 `sleep(0.2)` 的伪工具该值 ≥ `180`。
 - [ ] `status` 三态：成功工具得 `"success"`；抛异常的工具得 `"error"`；`timeout_seconds=0.05` 且 `sleep(1)` 的工具得 `"timeout"`。
 - [ ] 单个调用失败不影响同批：一批 3 个调用其中 1 个抛异常，仍返回 3 个结果。
-- [ ] `grep -n "_pre_hook\|_post_hook" mewcode/dispatch.py` 返回 ≥4 条（定义 + 调用点各 2）。
-- [ ] `grep -n "权限\|permission" mewcode/dispatch.py` 返回 ≥1 条（权限检查空位有明确注释标记）。
+- [ ] `grep -n "_pre_hook\|_post_hook" zxcode/dispatch.py` 返回 ≥4 条（定义 + 调用点各 2）。
+- [ ] `grep -n "权限\|permission" zxcode/dispatch.py` 返回 ≥1 条（权限检查空位有明确注释标记）。
 
 ## 六、plan-only 模式
 
@@ -83,7 +83,7 @@
 - [ ] 模型流式输出 5 个 delta 时，产出恰好 5 个 `text` 事件（增量粒度），各 `data["content"]` 拼接后等于完整文本。
 - [ ] 所有事件的 `turn` 字段单调不减，且第一轮事件的 `turn == 0`。
 - [ ] 事件流中 `tool_result` 的数量等于该轮 `tool_calls` 的数量（含被拦截和失败的）。
-- [ ] `grep -rn "textual\|from .app" mewcode/agent.py mewcode/events.py mewcode/dispatch.py mewcode/state.py` 返回 `0` 条（循环层不依赖界面）。
+- [ ] `grep -rn "textual\|from .app" zxcode/agent.py zxcode/events.py zxcode/dispatch.py zxcode/state.py` 返回 `0` 条（循环层不依赖界面）。
 
 ## 九、取消与消息配对
 
@@ -97,12 +97,12 @@
 
 ## 十、主流程接入
 
-- [ ] `grep -n "/plan" mewcode/app.py` 返回 ≥2 条（命令分发 + 帮助文案）。
+- [ ] `grep -n "/plan" zxcode/app.py` 返回 ≥2 条（命令分发 + 帮助文案）。
 - [ ] `/help` 输出精确等于：`/help  /clear  /exit  /model <名称>  /plan`。
 - [ ] `/plan` 执行一次后 `app.config.plan_only is True`，再执行一次后为 `False`。
 - [ ] `plan_only` 为真时，状态栏文本包含子串 `plan-only`；为假时不包含。
-- [ ] `grep -n "worker.cancel()" mewcode/app.py` 返回 `0` 条；`grep -n "cancel_token.cancel()" mewcode/app.py` 返回 ≥1 条。
-- [ ] `grep -n "TextDelta" mewcode/app.py` 返回 `0` 条（界面已改为消费 `Event`）。
+- [ ] `grep -n "worker.cancel()" zxcode/app.py` 返回 `0` 条；`grep -n "cancel_token.cancel()" zxcode/app.py` 返回 ≥1 条。
+- [ ] `grep -n "TextDelta" zxcode/app.py` 返回 `0` 条（界面已改为消费 `Event`）。
 - [ ] `README.md` 的「操作」小节包含 `/plan` 一行说明。
 
 ## 十一、端到端验收

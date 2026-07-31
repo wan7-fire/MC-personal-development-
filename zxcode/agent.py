@@ -13,16 +13,13 @@ from .client import AssistantMessage, ChatClient, ReasoningDelta, TextDelta
 from .config import AgentConfig, TerminationReason
 from .dispatch import ToolDispatcher
 from .events import Event, EventChannel, EventType
+from .prompts import PLAN_ONLY_CONTENT, plan_only_message
 from .state import LoopStateMachine
 from .terminator import LoopTerminator, TerminationDecision
 from .tools import ToolCall, ToolContext, ToolExecutor, ToolRegistry, ToolResult
 
 
-PLAN_ONLY_INSTRUCTION = (
-    " You are currently in plan-only mode: write tools are blocked. "
-    "Do not retry blocked calls. Instead, produce a numbered, step-by-step plan "
-    "describing what you would change and why, and hand it back for approval."
-)
+PLAN_ONLY_INSTRUCTION = PLAN_ONLY_CONTENT
 
 
 class _Cancelled(Exception):
@@ -247,13 +244,10 @@ class AgentLoop:
     ) -> None:
         if not config.plan_only:
             return
-        for message in history:
-            if message.get("role") == "system":
-                message["content"] = (
-                    str(message.get("content") or "") + PLAN_ONLY_INSTRUCTION
-                )
-                return
-        history.insert(0, {"role": "system", "content": PLAN_ONLY_INSTRUCTION.strip()})
+        index = 0
+        while index < len(history) and history[index].get("role") == "system":
+            index += 1
+        history.insert(index, plan_only_message())
 
     def _check_cancel(self, token: CancelToken) -> None:
         if token.is_cancelled():

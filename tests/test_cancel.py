@@ -2,7 +2,7 @@ import asyncio
 import threading
 import unittest
 
-from mewcode.cancel import CancelToken
+from zxcode.cancel import CancelToken
 
 
 class CancelTokenTests(unittest.IsolatedAsyncioTestCase):

@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ..security import resolve_project_path
 from .base import Tool, ToolContext, ToolResult
 
 
@@ -20,19 +21,7 @@ def failure(code: str, message: str, **metadata: Any) -> ToolResult:
 
 
 def resolve_path(root: Path, raw_path: Any) -> Path | ToolResult:
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        return failure("invalid_arguments", "invalid arguments: path must be a string")
-    try:
-        project = root.resolve(strict=True)
-        supplied = Path(raw_path)
-        candidate = (supplied if supplied.is_absolute() else project / supplied).resolve(
-            strict=False
-        )
-    except (OSError, RuntimeError):
-        return failure("invalid_arguments", "invalid arguments: invalid path")
-    if not candidate.is_relative_to(project):
-        return failure("path_outside_root", "path is outside working directory")
-    return candidate
+    return resolve_project_path(root, raw_path)
 
 
 def read_utf8(path: Path) -> tuple[str, bytes] | ToolResult:
@@ -53,7 +42,7 @@ def read_utf8(path: Path) -> tuple[str, bytes] | ToolResult:
 
 
 def atomic_write(path: Path, data: bytes) -> None:
-    descriptor, temporary = tempfile.mkstemp(prefix=".mewcode-", dir=path.parent)
+    descriptor, temporary = tempfile.mkstemp(prefix=".zxcode-", dir=path.parent)
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(data)
@@ -97,6 +86,15 @@ def _text_bytes(content: Any) -> bytes | ToolResult:
 
 async def _approved(context: ToolContext, title: str, detail: str) -> bool:
     return bool(context.confirm and await context.confirm(title, detail))
+
+
+async def _security_guard(
+    context: ToolContext, tool: str, path: Path, *, exists: bool
+) -> ToolResult | None:
+    security = getattr(context, "security", None)
+    if security is None:
+        return None
+    return await security.guard_file(tool, path, context, exists=exists)
 
 
 class ReadFile(Tool):
@@ -182,8 +180,11 @@ class WriteFile(Tool):
                 return failure("invalid_arguments", "invalid arguments: expected_sha256 is required")
             if expected != _sha256(current):
                 return failure("conflict", "file changed since it was read")
+            blocked = await _security_guard(context, self.name, path, exists=True)
+            if blocked is not None:
+                return blocked
             relative = path.relative_to(context.working_directory.resolve())
-            if not await _approved(context, self.name, f"Overwrite {relative}"):
+            if context.security is None and not await _approved(context, self.name, f"Overwrite {relative}"):
                 return failure("permission_denied", "permission denied by user")
             checked = _recheck_snapshot(
                 context.working_directory, arguments.get("path"), path, expected
@@ -191,6 +192,10 @@ class WriteFile(Tool):
             if isinstance(checked, ToolResult):
                 return checked
             path = checked
+        else:
+            blocked = await _security_guard(context, self.name, path, exists=False)
+            if blocked is not None:
+                return blocked
         try:
             atomic_write(path, data)
         except OSError:
@@ -264,8 +269,11 @@ class EditFile(Tool):
         data = _text_bytes(updated)
         if isinstance(data, ToolResult):
             return data
+        blocked = await _security_guard(context, self.name, path, exists=True)
+        if blocked is not None:
+            return blocked
         relative = path.relative_to(context.working_directory.resolve())
-        if not await _approved(context, self.name, f"Edit {relative}"):
+        if context.security is None and not await _approved(context, self.name, f"Edit {relative}"):
             return failure("permission_denied", "permission denied by user")
         checked = _recheck_snapshot(
             context.working_directory, arguments.get("path"), path, expected

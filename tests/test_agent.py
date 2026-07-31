@@ -2,12 +2,12 @@ import asyncio
 import json
 import unittest
 
-from mewcode.agent import AgentComplete, AgentLoop
-from mewcode.client import AssistantMessage, ReasoningDelta, TextDelta
-from mewcode.config import AgentConfig
-from mewcode.events import EventChannel, EventType
-from mewcode.state import LoopState
-from mewcode.tools import Tool, ToolExecutor, ToolRegistry, ToolResult
+from zxcode.agent import AgentComplete, AgentLoop
+from zxcode.client import AssistantMessage, ReasoningDelta, TextDelta
+from zxcode.config import AgentConfig
+from zxcode.events import EventChannel, EventType
+from zxcode.state import LoopState
+from zxcode.tools import Tool, ToolExecutor, ToolRegistry, ToolResult
 
 
 class EchoTool(Tool):
@@ -416,9 +416,13 @@ class PlanOnlyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(executor.calls, ["call-1"])
         self.assertEqual(completed.blocked_calls, [])
 
-    async def test_plan_only_extends_the_system_prompt(self):
+    async def test_plan_only_keeps_the_stable_system_prompt_unchanged(self):
         registry = ToolRegistry([EchoTool(), WriteTool()])
-        base = [{"role": "system", "content": "sys"}]
+        base = [
+            {"role": "system", "content": "stable"},
+            {"role": "system", "content": "Runtime environment: test"},
+            {"role": "user", "content": "hi"},
+        ]
 
         plain = FakeClient([[AssistantMessage({"role": "assistant", "content": "a"})]])
         await drive(AgentLoop(plain, registry, ToolExecutor(registry)), base)
@@ -434,10 +438,9 @@ class PlanOnlyTests(unittest.IsolatedAsyncioTestCase):
             base,
         )
 
-        self.assertGreater(
-            len(planning.requests[0][0][0]["content"]),
-            len(plain.requests[0][0][0]["content"]),
-        )
+        self.assertEqual(planning.requests[0][0][0], plain.requests[0][0][0])
+        self.assertIn("plan-only", planning.requests[0][0][2]["content"])
+        self.assertEqual(planning.requests[0][0][3], base[-1])
 
     async def test_blocked_calls_accumulate_across_turns(self):
         registry = ToolRegistry([EchoTool(), WriteTool()])

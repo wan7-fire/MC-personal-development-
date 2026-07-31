@@ -3,7 +3,7 @@ import unittest
 
 from openai.lib._parsing._completions import validate_input_tools
 
-from mewcode.tools import Tool, ToolCall, ToolExecutor, ToolRegistry, ToolResult
+from zxcode.tools import Tool, ToolCall, ToolExecutor, ToolRegistry, ToolResult
 
 
 class EchoTool(Tool):

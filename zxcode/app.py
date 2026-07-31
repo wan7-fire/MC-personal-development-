@@ -19,6 +19,7 @@ from .cancel import CancelToken
 from .client import ChatClient, Settings, friendly_error, friendly_error_name
 from .config import AgentConfig
 from .events import EventChannel, EventType
+from .security import load_policy
 from .session import ChatSession
 from .tools import (
     Bash,
@@ -33,13 +34,13 @@ from .tools import (
 )
 
 
-class ConfirmScreen(ModalScreen[bool]):
+class ConfirmScreen(ModalScreen[str]):
     CSS = """
     ConfirmScreen { align: center middle; }
     #confirm-dialog {
-        grid-size: 2 3;
+        grid-size: 2 4;
         grid-columns: 1fr 1fr;
-        grid-rows: auto 1fr auto;
+        grid-rows: auto 1fr auto auto;
         width: 70%;
         max-width: 90;
         height: auto;
@@ -61,18 +62,20 @@ class ConfirmScreen(ModalScreen[bool]):
         yield Grid(
             Label(self.title_text, id="confirm-title"),
             Static(self.detail, id="confirm-detail", markup=False),
-            Button("批准", id="approve", variant="success"),
+            Button("本次允许", id="approve", variant="success"),
+            Button("本会话允许", id="session", variant="primary"),
+            Button("永久允许", id="permanent", variant="warning"),
             Button("拒绝", id="deny", variant="error"),
             id="confirm-dialog",
         )
 
     @on(Button.Pressed)
     def choose(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "approve")
+        self.dismiss({"approve": "once"}.get(str(event.button.id), str(event.button.id)))
 
 
-class MewCodeApp(App):
-    TITLE = "MewCode"
+class ZXCodeApp(App):
+    TITLE = "ZXCode"
     CSS = """
     Screen { layout: vertical; }
     #status { height: 1; padding: 0 1; background: $primary-background; }
@@ -110,24 +113,25 @@ class MewCodeApp(App):
         )
         self.cancel_token = CancelToken()
         self.config = AgentConfig(cancel_token=self.cancel_token)
+        self.security = load_policy(Path.cwd(), self.config.security_mode)
         self.agent = agent or AgentLoop(
             self.client,
             self.registry,
             ToolExecutor(self.registry),
             config=self.config,
-            context=ToolContext(Path.cwd(), self.confirm_tool),
+            context=ToolContext(Path.cwd(), self.confirm_tool, self.security),
         )
         self.session = ChatSession(settings.model)
         self.active_worker: Worker | None = None
         self.request_started = 0.0
 
-    async def confirm_tool(self, title: str, detail: str) -> bool:
+    async def confirm_tool(self, title: str, detail: str) -> str:
         screen = ConfirmScreen(title, detail)
         try:
-            return bool(await self.push_screen_wait(screen))
+            return str(await self.push_screen_wait(screen))
         except asyncio.CancelledError:
             if self.screen is screen:
-                screen.dismiss(False)
+                screen.dismiss("deny")
             raise
 
     def compose(self) -> ComposeResult:
@@ -161,7 +165,7 @@ class MewCodeApp(App):
 
         messages = self.query_one("#messages", VerticalScroll)
         messages.mount(Static(f"You:\n{user_text}", classes="message user", markup=False))
-        assistant = Static("MewCode:\n", classes="message assistant", markup=False)
+        assistant = Static("ZXCode:\n", classes="message assistant", markup=False)
         messages.mount(assistant)
         self.request_started = monotonic()
         self.active_worker = self.generate(user_text, assistant)
@@ -207,7 +211,7 @@ class MewCodeApp(App):
             # A pending approval dialog blocks the tool that owns it, so a
             # cooperative flag alone would never reach the loop.
             if isinstance(self.screen, ConfirmScreen):
-                self.screen.dismiss(False)
+                self.screen.dismiss("deny")
         else:
             self.exit()
 
@@ -245,10 +249,16 @@ class MewCodeApp(App):
         self.session.commit_messages(user_text, completed.messages)
         if completed.blocked_calls:
             blocked = "\n".join(
-                f"  - {item['tool_name']} {item['arguments']}"
+                f"  - {item['tool_name']} {item['arguments']}: {item.get('reason', '')}"
                 for item in completed.blocked_calls
             )
-            self.notice(f"plan-only 已拦截以下写操作：\n{blocked}")
+            if all(
+                "plan-only" in str(item.get("reason", ""))
+                for item in completed.blocked_calls
+            ):
+                self.notice(f"plan-only 已拦截以下写操作：\n{blocked}")
+            else:
+                self.notice(f"工具调用已被安全策略拦截：\n{blocked}")
         self.request_started = 0.0
         self.set_status(status)
 
@@ -258,7 +268,7 @@ class MewCodeApp(App):
         """Nothing usable came back: restore the input and commit nothing."""
         self.query_one("#input", TextArea).load_text(user_text)
         suffix = "\n[已取消]" if status == "已取消" else "\n[失败]"
-        assistant.update(f"MewCode:\n{answer}{suffix}")
+        assistant.update(f"ZXCode:\n{answer}{suffix}")
         self.request_started = 0.0
         self.set_status(status)
 
@@ -268,7 +278,7 @@ class MewCodeApp(App):
         messages = self.query_one("#messages", VerticalScroll)
         if event.type == EventType.TEXT:
             answer += event.data.get("content", "")
-            assistant.update(f"MewCode:\n{answer}")
+            assistant.update(f"ZXCode:\n{answer}")
             self.set_status("生成中")
             messages.scroll_end(animate=False)
         elif event.type == EventType.THINKING:
@@ -283,9 +293,9 @@ class MewCodeApp(App):
             )
             messages.scroll_end(animate=False)
         elif event.type == EventType.ERROR:
-            assistant.update(f"MewCode:\n{answer}\n[失败]")
+            assistant.update(f"ZXCode:\n{answer}\n[失败]")
             status = friendly_error_name(event.data.get("error_type", ""))
         elif event.type == EventType.CANCELLED:
-            assistant.update(f"MewCode:\n{answer}\n[已取消]")
+            assistant.update(f"ZXCode:\n{answer}\n[已取消]")
             status = "已取消"
         return answer, status

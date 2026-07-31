@@ -1,4 +1,4 @@
-# MewCode Agent 循环任务分解
+# ZXCode Agent 循环任务分解
 
 > 共 12 个任务，按依赖顺序排列。每个任务应能在一次专注会话内完成。
 > 参考规格：`docs/agent-loop/spec.md`；验收项：`docs/agent-loop/checklist.md`。
@@ -7,7 +7,7 @@
 
 ## T1 — 定义事件类型与事件数据结构
 
-**影响文件**：`mewcode/events.py`（新建）、`tests/test_events.py`（新建）
+**影响文件**：`zxcode/events.py`（新建）、`tests/test_events.py`（新建）
 
 **依赖**：无
 
@@ -20,13 +20,13 @@
 **参考资料定位**
 
 - 事件类型清单与各事件 `data` 字段：`agnent loop part/事件流与工具执行规范.md` 第 1.3、1.4 节。
-- 现有冻结数据类风格：`mewcode/client.py:17-25`（`TextDelta`、`AssistantMessage`）。
+- 现有冻结数据类风格：`zxcode/client.py:17-25`（`TextDelta`、`AssistantMessage`）。
 
 ---
 
 ## T2 — 实现异步事件通道
 
-**影响文件**：`mewcode/events.py`、`tests/test_events.py`
+**影响文件**：`zxcode/events.py`、`tests/test_events.py`
 
 **依赖**：T1
 
@@ -45,7 +45,7 @@
 
 ## T3 — 实现取消令牌
 
-**影响文件**：`mewcode/cancel.py`（新建）、`tests/test_cancel.py`（新建）
+**影响文件**：`zxcode/cancel.py`（新建）、`tests/test_cancel.py`（新建）
 
 **依赖**：无
 
@@ -63,7 +63,7 @@
 
 ## T4 — 实现循环状态机
 
-**影响文件**：`mewcode/state.py`（新建）、`tests/test_state.py`（新建）
+**影响文件**：`zxcode/state.py`（新建）、`tests/test_state.py`（新建）
 
 **依赖**：无
 
@@ -83,7 +83,7 @@
 
 ## T5 — 定义循环配置与终止原因
 
-**影响文件**：`mewcode/config.py`（新建）、`tests/test_state.py`
+**影响文件**：`zxcode/config.py`（新建）、`tests/test_state.py`
 
 **依赖**：T3
 
@@ -95,14 +95,14 @@
 
 **参考资料定位**
 
-- 现有守卫配置字段与默认值：`mewcode/terminator.py:11-18`（`LoopTerminatorConfig`）。
-- 守卫产出的原因字符串：`mewcode/terminator.py:48,57,72,84`。
+- 现有守卫配置字段与默认值：`zxcode/terminator.py:11-18`（`LoopTerminatorConfig`）。
+- 守卫产出的原因字符串：`zxcode/terminator.py:48,57,72,84`。
 
 ---
 
 ## T6 — 实现带事件与拦截位的工具批次调度层
 
-**影响文件**：`mewcode/dispatch.py`（新建）、`tests/test_dispatch.py`（新建）
+**影响文件**：`zxcode/dispatch.py`（新建）、`tests/test_dispatch.py`（新建）
 
 **依赖**：T1、T2、T5
 
@@ -116,16 +116,16 @@
 
 **参考资料定位**
 
-- 现有读写分组与顺序保序逻辑：`mewcode/tools/executor.py:18-47`（`execute_batch`）。
-- 现有超时与异常归一化、`code` 取值：`mewcode/tools/executor.py:69-87`。
-- `read_only` 属性定义：`mewcode/tools/base.py:52`。
+- 现有读写分组与顺序保序逻辑：`zxcode/tools/executor.py:18-47`（`execute_batch`）。
+- 现有超时与异常归一化、`code` 取值：`zxcode/tools/executor.py:69-87`。
+- `read_only` 属性定义：`zxcode/tools/base.py:52`。
 - 拦截位布局与伪代码：`agnent loop part/事件流与工具执行规范.md` 第 2.4、2.5 节。
 
 ---
 
 ## T7 — 重构 AgentLoop 为事件驱动的 ReAct 循环
 
-**影响文件**：`mewcode/agent.py`、`mewcode/client.py`、`tests/test_agent.py`
+**影响文件**：`zxcode/agent.py`、`zxcode/client.py`、`tests/test_agent.py`
 
 **依赖**：T1–T6
 
@@ -135,22 +135,22 @@
 - 新增 `async run(messages, model, channel) -> AgentComplete`：不再是异步生成器，全部过程通过 `channel` 发事件，返回值只承载最终结果。
 - `run` 开始时先发一个 `user_message` 事件，内容取 `messages` 中最后一条 `role == "user"` 的消息。
 - 一轮流程：检查取消 → 状态转 `RUNNING` → 调模型并把 `TextDelta` 逐条发为 `text` 事件 → 追加 assistant 消息 → 无 `tool_calls` 则发 `final_reply` + `turn_end(end_turn)` 后结束 → 有调用则转 `TOOL_EXECUTING`、交给 `ToolDispatcher`、逐条发 `tool_result`、回填 tool 消息 → 转回 `RUNNING` → 询问终止守卫 → 发 `turn_end`。
-- `thinking` 事件：`ChatClient.stream_events` 目前只产出 `TextDelta` 与 `AssistantMessage`，本任务在 `mewcode/client.py` 增加一个 `ReasoningDelta` 冻结数据类，并在流事件类型为推理增量时产出；`AgentLoop` 收到后发 `thinking` 事件。服务商不返回推理内容时该事件自然缺席，不视为失败。
+- `thinking` 事件：`ChatClient.stream_events` 目前只产出 `TextDelta` 与 `AssistantMessage`，本任务在 `zxcode/client.py` 增加一个 `ReasoningDelta` 冻结数据类，并在流事件类型为推理增量时产出；`AgentLoop` 收到后发 `thinking` 事件。服务商不返回推理内容时该事件自然缺席，不视为失败。
 - 循环结束统一发 `loop_end`（含 `total_turns`、`termination_reason`）并 `channel.close()`。
 - 保留 `_prepare` 的参数解析与 `invalid_arguments` 错误语义不变。
 - 保留现有守卫调用：成功结果走 observation 分支、失败结果走 error 分支、轮末走 progress 分支。
 
 **参考资料定位**
 
-- 现有循环骨架、守卫调用顺序、progress 集合构造：`mewcode/agent.py:37-116`。
-- 现有 `_prepare` 与 `invalid_arguments` 错误结构：`mewcode/agent.py:136-153`。
-- 模型流事件来源与 `AssistantMessage` 产出：`mewcode/client.py:69-93`（`stream_events`）。
+- 现有循环骨架、守卫调用顺序、progress 集合构造：`zxcode/agent.py:37-116`。
+- 现有 `_prepare` 与 `invalid_arguments` 错误结构：`zxcode/agent.py:136-153`。
+- 模型流事件来源与 `AssistantMessage` 产出：`zxcode/client.py:69-93`（`stream_events`）。
 
 ---
 
 ## T8 — 实现取消收尾与消息配对保证
 
-**影响文件**：`mewcode/agent.py`、`tests/test_agent.py`
+**影响文件**：`zxcode/agent.py`、`tests/test_agent.py`
 
 **依赖**：T7
 
@@ -164,15 +164,15 @@
 
 **参考资料定位**
 
-- 现有 assistant/tool 消息成对追加逻辑：`mewcode/agent.py:56-80`。
-- 会话提交入口与消息形状要求：`mewcode/session.py:35-41`（`commit_messages`）。
-- 流关闭方式：`mewcode/client.py:82-86`（`async with stream`）。
+- 现有 assistant/tool 消息成对追加逻辑：`zxcode/agent.py:56-80`。
+- 会话提交入口与消息形状要求：`zxcode/session.py:35-41`（`commit_messages`）。
+- 流关闭方式：`zxcode/client.py:82-86`（`async with stream`）。
 
 ---
 
 ## T9 — 实现 plan-only 收尾与拦截清单
 
-**影响文件**：`mewcode/agent.py`、`mewcode/dispatch.py`、`tests/test_agent.py`
+**影响文件**：`zxcode/agent.py`、`zxcode/dispatch.py`、`tests/test_agent.py`
 
 **依赖**：T6、T7
 
@@ -185,8 +185,8 @@
 
 **参考资料定位**
 
-- 现有 `AgentComplete` 定义：`mewcode/agent.py:15-20`。
-- 现有系统提示词：`mewcode/session.py:8-11`（`SYSTEM_PROMPT`）。
+- 现有 `AgentComplete` 定义：`zxcode/agent.py:15-20`。
+- 现有系统提示词：`zxcode/session.py:8-11`（`SYSTEM_PROMPT`）。
 - plan-only 行为规则表：`agnent loop part/事件流与工具执行规范.md` 第 3.3 节。
 
 ---
@@ -214,13 +214,13 @@
 
 ## T11 — 接入主流程
 
-**影响文件**：`mewcode/app.py`、`mewcode/__main__.py`、`README.md`、`tests/test_app.py`
+**影响文件**：`zxcode/app.py`、`zxcode/__main__.py`、`README.md`、`tests/test_app.py`
 
 **依赖**：T7–T9
 
 **内容**
 
-- `MewCodeApp.__init__` 构造 `AgentConfig` 与 `CancelToken`，`AgentLoop` 按新签名创建。
+- `ZXCodeApp.__init__` 构造 `AgentConfig` 与 `CancelToken`，`AgentLoop` 按新签名创建。
 - `generate` worker 改为：创建 `EventChannel` → 起一个任务跑 `agent.run(...)` → `async for event in channel` 按事件类型渲染（`text` 追加、`thinking` 暗色渲染、`tool_call_start`/`tool_call_end` 渲染工具状态行、`error`/`cancelled` 更新状态栏、`final_reply` 记录待提交内容）→ 等待 run 任务返回 `AgentComplete` 并 `commit_messages`。
 - `action_interrupt` 改为触发 `cancel_token.cancel()` 并等待循环收尾，不再直接 `worker.cancel()`；空闲时行为不变（退出）。
 - 新增 `/plan` 斜杠命令切换 `config.plan_only`，`/help` 文案同步更新为 `/help  /clear  /exit  /model <名称>  /plan`。
@@ -229,11 +229,11 @@
 
 **参考资料定位**
 
-- 现有 worker 与事件消费位置：`mewcode/app.py:193-226`（`generate`）。
-- 现有取消实现：`mewcode/app.py:187-191`（`action_interrupt`）。
-- 现有斜杠命令分发与帮助文案：`mewcode/app.py:162-180`（`handle_command`）。
-- 现有状态栏渲染：`mewcode/app.py:137-141`（`set_status`）。
-- `AgentLoop` 构造位置：`mewcode/app.py:105-113`。
+- 现有 worker 与事件消费位置：`zxcode/app.py:193-226`（`generate`）。
+- 现有取消实现：`zxcode/app.py:187-191`（`action_interrupt`）。
+- 现有斜杠命令分发与帮助文案：`zxcode/app.py:162-180`（`handle_command`）。
+- 现有状态栏渲染：`zxcode/app.py:137-141`（`set_status`）。
+- `AgentLoop` 构造位置：`zxcode/app.py:105-113`。
 
 ---
 

@@ -1,6 +1,7 @@
 import unittest
 
-from mewcode.session import SYSTEM_PROMPT, ChatSession
+from zxcode.prompts import build_stable_prompt
+from zxcode.session import SYSTEM_PROMPT, ChatSession
 
 
 class SessionTests(unittest.TestCase):
@@ -9,7 +10,9 @@ class SessionTests(unittest.TestCase):
 
         request = session.request_messages("hello")
 
-        self.assertEqual(request[0], {"role": "system", "content": SYSTEM_PROMPT})
+        self.assertEqual(request[0], {"role": "system", "content": build_stable_prompt()})
+        self.assertEqual(request[1]["role"], "system")
+        self.assertIn("Runtime environment", request[1]["content"])
         self.assertEqual(request[-1], {"role": "user", "content": "hello"})
         self.assertEqual(session.messages, [])
         self.assertEqual(session.turns, 0)
@@ -29,7 +32,9 @@ class SessionTests(unittest.TestCase):
         )
         session.clear()
         self.assertEqual(session.messages, [])
-        self.assertEqual(session.request_messages("again")[0]["content"], SYSTEM_PROMPT)
+        self.assertEqual(
+            session.request_messages("again")[0]["content"], build_stable_prompt()
+        )
 
     def test_model_switch_keeps_history(self):
         session = ChatSession("model-a")
@@ -58,7 +63,21 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(session.messages[0]["role"], "user")
         self.assertEqual(session.messages[1:], assistant_messages)
         request = session.request_messages("again")
-        self.assertEqual(request[2:5], assistant_messages)
+        self.assertEqual(request[3:6], assistant_messages)
+
+    def test_dynamic_messages_are_inserted_before_history(self):
+        session = ChatSession("model-a")
+        session.commit("hello", "hi")
+
+        request = session.request_messages(
+            "again", dynamic_messages=[{"role": "system", "content": "mode"}]
+        )
+
+        self.assertEqual(request[0]["content"], build_stable_prompt())
+        self.assertIn("Runtime environment", request[1]["content"])
+        self.assertEqual(request[2], {"role": "system", "content": "mode"})
+        self.assertEqual(request[3]["role"], "user")
+        self.assertEqual(request[-1], {"role": "user", "content": "again"})
 
 
 if __name__ == "__main__":

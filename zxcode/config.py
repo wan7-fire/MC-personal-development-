@@ -37,6 +37,7 @@ ALL_REASONS = (
 class AgentConfig:
     max_turns: int = 20
     plan_only: bool = False
+    security_mode: str = "default"
     llm_timeout_seconds: float = 120.0
     cancel_token: CancelToken = field(default_factory=CancelToken)
     terminator_config: LoopTerminatorConfig = field(

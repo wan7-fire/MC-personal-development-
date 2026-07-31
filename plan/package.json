@@ -1,0 +1,25 @@
+{
+  "name": "ai-aligner-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ai-aligner": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "diff": "^5.2.0",
+    "fast-glob": "^3.3.2",
+    "ts-morph": "^23.0.0",
+    "typescript": "^5.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.12",
+    "tsx": "^4.16.2"
+  }
+}

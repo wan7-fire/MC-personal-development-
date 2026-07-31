@@ -1,4 +1,4 @@
-"""Minimal contracts shared by MewCode tools."""
+"""Minimal contracts shared by ZXCode tools."""
 
 from __future__ import annotations
 
@@ -10,13 +10,14 @@ from pathlib import Path
 from typing import Any
 
 
-Confirm = Callable[[str, str], Awaitable[bool]]
+Confirm = Callable[[str, str], Awaitable[bool | str]]
 
 
 @dataclass(frozen=True)
 class ToolContext:
     working_directory: Path = field(default_factory=Path.cwd)
     confirm: Confirm | None = None
+    security: Any = None
 
 
 @dataclass(frozen=True)

@@ -1,8 +1,8 @@
-"""Run MewCode with ``python -m mewcode``."""
+"""Run ZXCode with ``python -m zxccode``."""
 
 import sys
 
-from .app import MewCodeApp
+from .app import ZXCodeApp
 from .client import ConfigError, Settings
 
 
@@ -13,10 +13,9 @@ def main() -> int:
         print(error, file=sys.stderr)
         return 2
 
-    MewCodeApp(settings).run()
+    ZXCodeApp(settings).run()
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -8,10 +8,10 @@ from unittest.mock import patch
 
 from textual.widgets import Static, TextArea
 
-from mewcode.agent import AgentComplete
-from mewcode.app import ConfirmScreen, MewCodeApp
-from mewcode.client import AssistantMessage, Settings, TextDelta
-from mewcode.events import Event, EventType
+from zxcode.agent import AgentComplete
+from zxcode.app import ConfirmScreen, ZXCodeApp
+from zxcode.client import AssistantMessage, Settings, TextDelta
+from zxcode.events import Event, EventType
 
 
 class FakeClient:
@@ -106,7 +106,7 @@ def assertNoDanglingCalls(case, messages):
             case.assertIn(call["id"], answered)
 
 
-class TrackingApp(MewCodeApp):
+class TrackingApp(ZXCodeApp):
     def __init__(self, *args, **kwargs):
         self.states = []
         super().__init__(*args, **kwargs)
@@ -118,7 +118,7 @@ class TrackingApp(MewCodeApp):
 
 class AppTests(unittest.IsolatedAsyncioTestCase):
     def test_default_registry_exposes_six_builtin_tools(self):
-        app = MewCodeApp(Settings("secret", "https://example.test/v1", "model-a"), FakeClient())
+        app = ZXCodeApp(Settings("secret", "https://example.test/v1", "model-a"), FakeClient())
 
         self.assertEqual(
             {definition["function"]["name"] for definition in app.registry.definitions()},
@@ -133,7 +133,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             client = ToolCallingClient(
                 relative, hashlib.sha256(path.read_bytes()).hexdigest()
             )
-            app = MewCodeApp(
+            app = ZXCodeApp(
                 Settings("secret", "https://example.test/v1", "model-a"), client
             )
 
@@ -160,7 +160,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
                 path.relative_to(Path.cwd()).as_posix(),
                 hashlib.sha256(path.read_bytes()).hexdigest(),
             )
-            app = MewCodeApp(
+            app = ZXCodeApp(
                 Settings("secret", "https://example.test/v1", "model-a"), client
             )
 
@@ -181,7 +181,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
                 assertNoDanglingCalls(self, app.session.messages)
 
     async def test_agent_tool_messages_are_committed_as_one_turn(self):
-        app = MewCodeApp(
+        app = ZXCodeApp(
             Settings("secret", "https://example.test/v1", "model-a"),
             FakeClient(),
             agent=FakeAgent(),
@@ -200,11 +200,11 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 app.query(".assistant").last(Static).render().plain,
-                "MewCode:\n完成",
+                "ZXCode:\n完成",
             )
 
     async def test_layout_shows_model_and_zero_turns(self):
-        app = MewCodeApp(Settings("secret", "https://example.test/v1", "model-a"), FakeClient())
+        app = ZXCodeApp(Settings("secret", "https://example.test/v1", "model-a"), FakeClient())
 
         async with app.run_test(size=(80, 24)):
             status = app.query_one("#status", Static).render().plain
@@ -223,7 +223,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
 
             assistant = app.query(".assistant").last(Static).render().plain
-            self.assertEqual(assistant, "MewCode:\n你好！")
+            self.assertEqual(assistant, "ZXCode:\n你好！")
             self.assertEqual(app.session.turns, 1)
             self.assertEqual(app.query_one("#input", TextArea).text, "")
             self.assertEqual(client.calls[0][1], "model-a")
@@ -233,7 +233,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_submit_preserves_code_indentation_and_trailing_newline(self):
         client = FakeClient(("ok",))
-        app = MewCodeApp(Settings("secret", "https://example.test/v1", "model-a"), client)
+        app = ZXCodeApp(Settings("secret", "https://example.test/v1", "model-a"), client)
 
         async with app.run_test() as pilot:
             original = "    print('hello')\n"
@@ -246,7 +246,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pilot_enter_adds_newline_and_ctrl_enter_submits(self):
         client = FakeClient(("ok",))
-        app = MewCodeApp(Settings("secret", "https://example.test/v1", "model-a"), client)
+        app = ZXCodeApp(Settings("secret", "https://example.test/v1", "model-a"), client)
 
         async with app.run_test() as pilot:
             input_box = app.query_one("#input", TextArea)
@@ -261,7 +261,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.session.messages[0]["content"], "hello\n")
 
     async def test_pilot_ctrl_s_submits_on_windows(self):
-        app = MewCodeApp(
+        app = ZXCodeApp(
             Settings("secret", "https://example.test/v1", "model-a"), FakeClient(("ok",))
         )
 
@@ -276,7 +276,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_help_clear_and_model_commands_do_not_call_llm(self):
         client = FakeClient()
-        app = MewCodeApp(Settings("secret", "https://example.test/v1", "model-a"), client)
+        app = ZXCodeApp(Settings("secret", "https://example.test/v1", "model-a"), client)
 
         async with app.run_test() as pilot:
             input_box = app.query_one("#input", TextArea)
@@ -299,7 +299,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(client.calls, [])
 
     async def test_plan_command_toggles_mode_and_status(self):
-        app = MewCodeApp(
+        app = ZXCodeApp(
             Settings("secret", "https://example.test/v1", "model-a"), FakeClient()
         )
 
@@ -330,7 +330,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             client = ToolCallingClient(
                 path.relative_to(Path.cwd()).as_posix(), None
             )
-            app = MewCodeApp(
+            app = ZXCodeApp(
                 Settings("secret", "https://example.test/v1", "model-a"), client
             )
 
@@ -364,7 +364,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
                 path.relative_to(Path.cwd()).as_posix(),
                 hashlib.sha256(path.read_bytes()).hexdigest(),
             )
-            app = MewCodeApp(
+            app = ZXCodeApp(
                 Settings("secret", "https://example.test/v1", "model-a"), client
             )
 
@@ -388,7 +388,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
                 assertNoDanglingCalls(self, app.session.messages)
 
     async def test_conversation_continues_after_a_cancelled_turn(self):
-        app = MewCodeApp(
+        app = ZXCodeApp(
             Settings("secret", "https://example.test/v1", "model-a"), BlockingClient()
         )
 
@@ -411,7 +411,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             assertNoDanglingCalls(self, app.session.messages)
 
     async def test_failure_preserves_input_and_does_not_commit(self):
-        app = MewCodeApp(
+        app = ZXCodeApp(
             Settings("secret", "https://example.test/v1", "model-a"), FailingClient()
         )
 
@@ -426,7 +426,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("失败", app.query_one("#status", Static).render().plain)
 
     async def test_cancel_preserves_input_and_does_not_commit_partial_answer(self):
-        app = MewCodeApp(
+        app = ZXCodeApp(
             Settings("secret", "https://example.test/v1", "model-a"), BlockingClient()
         )
 
@@ -445,7 +445,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("已取消", app.query_one("#status", Static).render().plain)
 
     async def test_exit_command_calls_app_exit(self):
-        app = MewCodeApp(
+        app = ZXCodeApp(
             Settings("secret", "https://example.test/v1", "model-a"), FakeClient()
         )
 

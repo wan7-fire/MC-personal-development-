@@ -2,27 +2,34 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+from .prompts import build_environment_message, build_stable_prompt
 
-SYSTEM_PROMPT = (
-    "You are MewCode, a terminal AI programming assistant. "
-    "Provide concise, accurate, and actionable coding help."
-)
+
+SYSTEM_PROMPT = build_stable_prompt()
 
 
 @dataclass
 class ChatSession:
     model: str
     messages: list[dict[str, Any]] = field(default_factory=list)
+    prompt_root: Path = field(default_factory=Path.cwd)
 
     @property
     def turns(self) -> int:
         return sum(message.get("role") == "user" for message in self.messages)
 
-    def request_messages(self, user_text: str) -> list[dict[str, Any]]:
+    def request_messages(
+        self,
+        user_text: str,
+        dynamic_messages: Sequence[Mapping[str, Any]] = (),
+    ) -> list[dict[str, Any]]:
         return [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": build_stable_prompt(root=self.prompt_root)},
+            build_environment_message(self.prompt_root),
+            *(dict(message) for message in dynamic_messages),
             *self.messages,
             {"role": "user", "content": user_text},
         ]

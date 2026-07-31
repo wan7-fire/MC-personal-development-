@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ..security import command_path_policy, is_read_only_command
 from .base import Tool, ToolContext, ToolResult
 from .files import failure
 
@@ -40,7 +41,11 @@ _PROVIDER = re.compile(
 
 class Bash(Tool):
     name = "Bash"
-    description = "Run one non-interactive Windows PowerShell command in the project."
+    description = (
+        "Run one non-interactive Windows PowerShell command in the project. "
+        "Simple read-only commands run directly; non-read-only or unclear commands "
+        "require confirmation."
+    )
     read_only = False
     input_schema = {
         "type": "object",
@@ -56,6 +61,11 @@ class Bash(Tool):
         if not isinstance(command, str) or not command.strip():
             return failure("invalid_arguments", "invalid arguments: command must be non-empty")
         command = command.strip()
+        secured = context.security is not None
+        if secured:
+            blocked = await context.security.guard_shell(command, context)
+            if blocked is not None:
+                return blocked
         if _BACKGROUND.search(command):
             return failure(
                 "background_process_not_allowed", "persistent background processes are not allowed"
@@ -63,7 +73,7 @@ class Bash(Tool):
         path_policy = _path_policy(command, context.working_directory)
         if path_policy == "outside":
             return failure("path_outside_root", "path is outside working directory")
-        if not _is_read_only(command) or path_policy == "absolute":
+        if not secured and (not _is_read_only(command) or path_policy == "absolute"):
             if not context.confirm or not await context.confirm(
                 self.name,
                 "Command is not a simple project-local read-only operation.\n"
@@ -74,50 +84,11 @@ class Bash(Tool):
 
 
 def _is_read_only(command: str) -> bool:
-    if _DYNAMIC.search(command):
-        return False
-    words = command.split()
-    if not words:
-        return False
-    name = words[0].casefold()
-    if name in _READ_ONLY:
-        return True
-    if name != "git" or len(words) < 2:
-        return False
-    subcommand = words[1].casefold()
-    if subcommand not in _READ_ONLY_GIT or any(
-        word.casefold().startswith("--output") for word in words[2:]
-    ):
-        return False
-    if subcommand == "branch":
-        return len(words) == 2 or words[2:] == ["--show-current"]
-    return True
+    return is_read_only_command(command)
 
 
 def _path_policy(command: str, root: Path) -> str | None:
-    if _PARENT.search(command) or _HOME.search(command) or _PROVIDER.search(command):
-        return "outside"
-    absolute = False
-    project = root.resolve()
-    for match in _ABSOLUTE.finditer(command):
-        absolute = True
-        raw = match.group(0).rstrip(",)")
-        try:
-            if not Path(raw).resolve(strict=False).is_relative_to(project):
-                return "outside"
-        except (OSError, RuntimeError):
-            return "outside"
-    for word in _WORDS.findall(command)[1:]:
-        raw = word.strip("'\"")
-        candidate = project / raw
-        if not candidate.exists() and "/" not in raw and "\\" not in raw:
-            continue
-        try:
-            if not candidate.resolve(strict=False).is_relative_to(project):
-                return "outside"
-        except (OSError, RuntimeError):
-            return "outside"
-    return "absolute" if absolute else None
+    return command_path_policy(command, root)
 
 
 async def _run(command: str, root: Path) -> ToolResult:

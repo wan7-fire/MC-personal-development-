@@ -5,7 +5,7 @@ from unittest.mock import patch
 import httpx
 from openai import AuthenticationError, NotFoundError
 
-from mewcode.client import (
+from zxcode.client import (
     AssistantMessage,
     ChatClient,
     ConfigError,
@@ -96,7 +96,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
 
     def test_sdk_uses_confirmed_timeout_and_retry_values(self):
         settings = Settings("secret", "https://example.test/v1", "demo")
-        with patch("mewcode.client.AsyncOpenAI") as sdk:
+        with patch("zxcode.client.AsyncOpenAI") as sdk:
             ChatClient(settings)
         sdk.assert_called_once_with(
             api_key="secret",

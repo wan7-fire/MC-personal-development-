@@ -1,12 +1,12 @@
-# MewCode 六核心工具与 LLM 工具循环规格
+# ZXCode 六核心工具与 LLM 工具循环规格
 
 ## 背景
 
-MewCode 已具备 OpenAI-compatible LLM 流式对话、内存会话和 Textual 终端界面，但模型目前只能输出文本，不能读取项目、搜索代码、修改文件或执行命令。下一阶段需要在现有聊天链路中加入一个最小、可控的工具运行时，让模型能够通过正式的工具调用协议完成真实编程任务，同时避免路径逃逸、覆盖并发修改、半写文件和无限工具循环。
+ZXCode 已具备 OpenAI-compatible LLM 流式对话、内存会话和 Textual 终端界面，但模型目前只能输出文本，不能读取项目、搜索代码、修改文件或执行命令。下一阶段需要在现有聊天链路中加入一个最小、可控的工具运行时，让模型能够通过正式的工具调用协议完成真实编程任务，同时避免路径逃逸、覆盖并发修改、半写文件和无限工具循环。
 
 ## 目标用户
 
-- 在 Windows PowerShell 或 Windows Terminal 中使用 MewCode 处理本地代码项目的开发者。
+- 在 Windows PowerShell 或 Windows Terminal 中使用 ZXCode 处理本地代码项目的开发者。
 - 使用支持 OpenAI-compatible tool calling 的模型与服务商的用户。
 - 希望在执行文件修改和命令前获得清晰安全边界的用户。
 

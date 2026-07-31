@@ -3,7 +3,7 @@ import dataclasses
 import json
 import unittest
 
-from mewcode.events import Event, EventChannel, EventType
+from zxcode.events import Event, EventChannel, EventType
 
 
 class EventTests(unittest.TestCase):

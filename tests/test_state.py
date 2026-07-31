@@ -1,9 +1,9 @@
 import unittest
 
-from mewcode.cancel import CancelToken
-from mewcode.config import ALL_REASONS, AgentConfig, TerminationReason
-from mewcode.state import IllegalStateTransition, LoopState, LoopStateMachine
-from mewcode.terminator import LoopTerminatorConfig
+from zxcode.cancel import CancelToken
+from zxcode.config import ALL_REASONS, AgentConfig, TerminationReason
+from zxcode.state import IllegalStateTransition, LoopState, LoopStateMachine
+from zxcode.terminator import LoopTerminatorConfig
 
 
 LEGAL = [

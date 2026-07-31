@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mewcode.tools import EditFile, ReadFile, ToolContext, WriteFile
+from zxcode.tools import EditFile, ReadFile, ToolContext, WriteFile
 
 
 class FileToolTests(unittest.IsolatedAsyncioTestCase):
@@ -30,13 +30,13 @@ class FileToolTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_read_file_rejects_path_escape_and_invalid_utf8(self):
-        outside = self.root.parent / "outside-mewcode-test.txt"
+        outside = self.root.parent / "outside-zxcode-test.txt"
         outside.write_text("secret", encoding="utf-8")
         invalid = self.root / "invalid.txt"
         invalid.write_bytes(b"\xff")
         try:
             escaped = await ReadFile().execute(
-                {"path": "../outside-mewcode-test.txt", "start_line": None, "end_line": None},
+                {"path": "../outside-zxcode-test.txt", "start_line": None, "end_line": None},
                 ToolContext(self.root),
             )
             undecodable = await ReadFile().execute(
@@ -156,7 +156,7 @@ class FileToolTests(unittest.IsolatedAsyncioTestCase):
         result = await WriteFile().execute(
             {
                 "path": "race.txt",
-                "content": "mewcode",
+                "content": "zxcode",
                 "expected_sha256": expected,
             },
             ToolContext(self.root, modify_then_approve),
@@ -178,7 +178,7 @@ class FileToolTests(unittest.IsolatedAsyncioTestCase):
             {
                 "path": "race-edit.txt",
                 "expected_sha256": expected,
-                "edits": [{"old_text": "before", "new_text": "mewcode"}],
+                "edits": [{"old_text": "before", "new_text": "zxcode"}],
             },
             ToolContext(self.root, modify_then_approve),
         )

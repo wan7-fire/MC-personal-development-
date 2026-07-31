@@ -1,4 +1,4 @@
-# MewCode 六核心工具与 LLM 工具循环验收清单
+# ZXCode 六核心工具与 LLM 工具循环验收清单
 
 ## 基线与工具注册
 
@@ -97,6 +97,6 @@
 - [ ] 生成期间按 `Ctrl+C` 后 `1` 秒内停止追加文本或启动新工具，用户原输入保留，并且随后可以重新发送消息。
 - [ ] 使用 Textual `run_test()` 与伪造 LLM 完成“用户请求—Glob/Grep/ReadFile—WriteFile 新建—EditFile 授权—Bash 拒绝—最终回答”，全程无真实网络请求。
 - [ ] 在临时项目中先读取文件取得 SHA-256，再修改该文件并尝试覆盖，界面显示冲突且磁盘保留外部修改内容。
-- [ ] 使用有效的 OpenAI-compatible 配置启动 `python -m mewcode`，让模型至少成功调用一次 `ReadFile`，随后最终回答准确引用文件内容。
+- [ ] 使用有效的 OpenAI-compatible 配置启动 `python -m zxcode`，让模型至少成功调用一次 `ReadFile`，随后最终回答准确引用文件内容。
 - [ ] 在上述真实 API 会话中继续追问上一轮结果，模型能够利用已提交的用户、assistant 工具调用、tool 结果和最终 assistant 文本作答。
 - [ ] 完成真实 API 测试后，项目文件、会话消息、日志和界面中均未出现 `LLM_API_KEY` 的完整值。

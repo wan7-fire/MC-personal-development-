@@ -42,7 +42,11 @@ def _matches(path: str, pattern: str) -> bool:
 
 class Glob(Tool):
     name = "Glob"
-    description = "Find project files by a root-relative glob pattern, newest first."
+    description = (
+        "Find project files by a root-relative glob pattern, newest first. "
+        "Read-only search; automatically skips .git, node_modules, vendor, .idea, "
+        ".venv, and __pycache__."
+    )
     input_schema = {
         "type": "object",
         "properties": {

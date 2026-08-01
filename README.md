@@ -46,6 +46,27 @@ API Key 仅从当前进程环境读取，不写入项目文件。
 
 确认弹窗支持“本次允许 / 本会话允许 / 永久允许 / 拒绝”。选择“永久允许”会把精确命令签名或精确路径签名写回 `zxcode-security.toml`，例如反复运行同一条 `git commit` 时不会每次都重新询问。
 
+## 外部 MCP 服务器
+
+ZXCode 可以作为 MCP 客户端连接外部工具服务器：配置放在项目根目录的 `zxcode-servers.toml`，支持本地子进程（stdio）与远程 Streamable HTTP 两种传输。启动后自动完成初始化握手、拉取工具列表，并把远端工具注册为 `<server>_<工具名>`，Agent 可以像调用内置工具一样无感调用。
+
+```toml
+[[servers]]
+name = "local"
+transport = "stdio"
+command = ["python", "-m", "my_mcp_server"]
+env = { TOKEN = "${MY_TOKEN}" }
+
+[[servers]]
+name = "remote"
+transport = "http"
+url = "https://example.test/mcp"
+headers = { Authorization = "Bearer ${REMOTE_TOKEN}" }
+call_timeout_seconds = 30
+```
+
+敏感值一律通过 `${环境变量}` 引用，不写入配置文件明文。写类远端工具会先经过现有安全策略与确认弹窗；`trusted = true` 且服务器声明只读标注（或配置 `read_only_tools` 显式列出）的工具按只读并发放行。
+
 ## 提示词分层
 
 ZXCode 将稳定的全局指令放在请求最前面，将工作目录、系统、时间和 Git 摘要等动态环境信息放在后续独立消息中。这样兼容 prompt caching 的服务可以自然复用稳定前缀；API Key 仍只从当前进程环境读取，不会写入提示词或项目文件。

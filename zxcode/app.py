@@ -19,6 +19,7 @@ from .cancel import CancelToken
 from .client import ChatClient, Settings, friendly_error, friendly_error_name
 from .config import AgentConfig
 from .events import EventChannel, EventType
+from .mcp import ConfigError, McpConfig, McpManager
 from .security import load_policy
 from .session import ChatSession
 from .tools import (
@@ -104,6 +105,7 @@ class ZXCodeApp(App):
         *,
         agent: AgentLoop | None = None,
         registry: ToolRegistry | None = None,
+        mcp_manager: McpManager | None = None,
     ) -> None:
         super().__init__()
         self.settings = settings
@@ -111,6 +113,15 @@ class ZXCodeApp(App):
         self.registry = registry or ToolRegistry(
             [ReadFile(), WriteFile(), EditFile(), Bash(), Glob(), Grep()]
         )
+        self.mcp_manager = mcp_manager
+        self.mcp_config_error: str | None = None
+        if self.mcp_manager is None:
+            try:
+                self.mcp_manager = McpManager.from_root(Path.cwd())
+            except ConfigError as error:
+                self.mcp_config_error = str(error)
+                self.mcp_manager = McpManager(McpConfig())
+        self._mcp_task: asyncio.Task | None = None
         self.cancel_token = CancelToken()
         self.config = AgentConfig(cancel_token=self.cancel_token)
         self.security = load_policy(Path.cwd(), self.config.security_mode)
@@ -140,9 +151,26 @@ class ZXCodeApp(App):
         yield TextArea(id="input", show_line_numbers=False)
         yield Footer()
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self.set_status("就绪")
         self.query_one("#input", TextArea).focus()
+        if self.mcp_config_error:
+            self.notice(f"MCP 配置错误：{self.mcp_config_error}")
+        if self.mcp_manager.config.servers:
+            self._mcp_task = asyncio.create_task(self._start_mcp())
+
+    async def _start_mcp(self) -> None:
+        report = await self.mcp_manager.register_all(self.registry)
+        for item in report:
+            if not item["ok"]:
+                self.notice(f"MCP server {item['server']} 连接失败：{item['error']}")
+
+    async def on_unmount(self) -> None:
+        task = self._mcp_task
+        self._mcp_task = None
+        if task is not None and not task.done():
+            task.cancel()
+        await self.mcp_manager.close_all()
 
     def set_status(self, state: str) -> None:
         elapsed = monotonic() - self.request_started if self.request_started else 0.0

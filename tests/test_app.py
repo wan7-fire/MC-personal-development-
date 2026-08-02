@@ -11,6 +11,13 @@ from textual.widgets import Static, TextArea
 from zxcode.agent import AgentComplete
 from zxcode.app import ConfirmScreen, ZXCodeApp
 from zxcode.client import AssistantMessage, Settings, TextDelta
+from zxcode.compress import (
+    BEGIN_SUMMARY,
+    BOUNDARY_MESSAGE,
+    CompressionConfig,
+    CompressionManager,
+    END_SUMMARY,
+)
 from zxcode.events import Event, EventType
 
 
@@ -124,6 +131,121 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             {definition["function"]["name"] for definition in app.registry.definitions()},
             {"ReadFile", "WriteFile", "EditFile", "Bash", "Glob", "Grep"},
         )
+
+    async def test_generate_rebuilds_session_from_final_history(self):
+        class HistoryAgent:
+            async def run(self, messages, model, channel):
+                await channel.emit(
+                    Event(type=EventType.TEXT, data={"content": "ok"})
+                )
+                await channel.emit(
+                    Event(
+                        type=EventType.FINAL_REPLY,
+                        data={"content": "ok", "blocked_calls": []},
+                    )
+                )
+                channel.close()
+                return AgentComplete(
+                    "ok",
+                    [{"role": "assistant", "content": "ok"}],
+                    final_history=[
+                        {"role": "system", "content": "stable"},
+                        {"role": "system", "content": "env"},
+                        {"role": "user", "content": "hello"},
+                        {"role": "assistant", "content": "ok"},
+                    ],
+                )
+
+        app = ZXCodeApp(
+            Settings("secret", "https://example.test/v1", "model-a"),
+            FakeClient(),
+            agent=HistoryAgent(),
+        )
+
+        async with app.run_test() as pilot:
+            app.query_one("#input", TextArea).load_text("hello")
+            app.action_submit()
+            await app.active_worker.wait()
+            await pilot.pause()
+
+            self.assertEqual(
+                app.session.messages,
+                [
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "ok"},
+                ],
+            )
+            self.assertNotIn(
+                "system", [message["role"] for message in app.session.messages]
+            )
+
+    async def test_help_includes_compact(self):
+        app = ZXCodeApp(
+            Settings("secret", "https://example.test/v1", "model-a"), FakeClient()
+        )
+
+        async with app.run_test() as pilot:
+            app.handle_command("/help")
+            await pilot.pause()
+            help_text = app.query(".notice").last(Static).render().plain
+            self.assertIn("/compact", help_text)
+
+    async def test_compact_empty_session_notices_no_content(self):
+        app = ZXCodeApp(
+            Settings("secret", "https://example.test/v1", "model-a"), FakeClient()
+        )
+
+        async with app.run_test() as pilot:
+            worker = app.compact()
+            await worker.wait()
+            await pilot.pause()
+            notice = app.query(".notice").last(Static).render().plain
+            self.assertIn("没有可压缩的内容", notice)
+
+    async def test_compact_replaces_history_and_notices(self):
+        class SummaryClient:
+            def __init__(self):
+                self.requests = []
+
+            async def stream_events(self, messages, model=None, tools=None):
+                self.requests.append((list(messages), model, tools))
+                yield TextDelta(
+                    f"{BEGIN_SUMMARY}\n## 主要请求\n汇总\n{END_SUMMARY}"
+                )
+                yield AssistantMessage(
+                    {"role": "assistant", "content": "x"}
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = SummaryClient()
+            compressor = CompressionManager(
+                Path(directory),
+                CompressionConfig(context_window=2000),
+                client=client,
+            )
+            app = ZXCodeApp(
+                Settings("secret", "https://example.test/v1", "model-a"),
+                FakeClient(),
+                compressor=compressor,
+            )
+            app.session.messages = [
+                {"role": "user", "content": "u1"},
+                {"role": "assistant", "content": "a" * 5000},
+                {"role": "user", "content": "u2"},
+            ]
+
+            async with app.run_test() as pilot:
+                worker = app.compact()
+                await worker.wait()
+                await pilot.pause()
+
+                contents = [
+                    message.get("content") for message in app.session.messages
+                ]
+                self.assertIn(BOUNDARY_MESSAGE, contents)
+                notice = app.query(".notice").last(Static).render().plain
+                self.assertIn("压缩完成", notice)
+                self.assertEqual(client.requests[0][2], ())
 
     async def test_write_tool_confirmation_executes_and_returns_result_to_model(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:

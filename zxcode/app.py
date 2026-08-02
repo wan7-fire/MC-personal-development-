@@ -17,6 +17,7 @@ from textual.worker import Worker
 from .agent import AgentComplete, AgentLoop
 from .cancel import CancelToken
 from .client import ChatClient, Settings, friendly_error, friendly_error_name
+from .compress import CompressionConfig, CompressionFailure, CompressionManager
 from .config import AgentConfig
 from .events import EventChannel, EventType
 from .mcp import ConfigError, McpConfig, McpManager
@@ -106,6 +107,7 @@ class ZXCodeApp(App):
         agent: AgentLoop | None = None,
         registry: ToolRegistry | None = None,
         mcp_manager: McpManager | None = None,
+        compressor: CompressionManager | None = None,
     ) -> None:
         super().__init__()
         self.settings = settings
@@ -125,15 +127,20 @@ class ZXCodeApp(App):
         self.cancel_token = CancelToken()
         self.config = AgentConfig(cancel_token=self.cancel_token)
         self.security = load_policy(Path.cwd(), self.config.security_mode)
+        self.compressor = compressor or CompressionManager(
+            Path.cwd(), CompressionConfig(), client=self.client
+        )
         self.agent = agent or AgentLoop(
             self.client,
             self.registry,
             ToolExecutor(self.registry),
             config=self.config,
             context=ToolContext(Path.cwd(), self.confirm_tool, self.security),
+            compressor=self.compressor,
         )
         self.session = ChatSession(settings.model)
         self.active_worker: Worker | None = None
+        self.compact_worker: Worker | None = None
         self.request_started = 0.0
 
     async def confirm_tool(self, title: str, detail: str) -> str:
@@ -201,7 +208,7 @@ class ZXCodeApp(App):
     def handle_command(self, command: str) -> None:
         name, _, argument = command.partition(" ")
         if name == "/help":
-            self.notice("/help  /clear  /exit  /model <名称>  /plan")
+            self.notice("/help  /clear  /exit  /model <名称>  /plan  /compact")
         elif name == "/plan":
             self.config = self.config.with_plan_only(not self.config.plan_only)
             if hasattr(self.agent, "config"):
@@ -225,6 +232,8 @@ class ZXCodeApp(App):
                 self.set_status("就绪")
             else:
                 self.notice("用法：/model <名称>")
+        elif name == "/compact":
+            self.compact_worker = self.compact()
         else:
             self.notice(f"未知命令：{name}")
 
@@ -252,7 +261,9 @@ class ZXCodeApp(App):
         channel = EventChannel()
         runner = asyncio.create_task(
             self.agent.run(
-                self.session.request_messages(user_text), self.session.model, channel
+                self.session.prepare_request(user_text, compressor=self.compressor),
+                self.session.model,
+                channel,
             )
         )
 
@@ -274,7 +285,10 @@ class ZXCodeApp(App):
             self._abandon(user_text, assistant, answer, status)
             return
 
-        self.session.commit_messages(user_text, completed.messages)
+        if completed.final_history is not None:
+            self.session.rebuild_from_history(completed.final_history)
+        else:
+            self.session.commit_messages(user_text, completed.messages)
         if completed.blocked_calls:
             blocked = "\n".join(
                 f"  - {item['tool_name']} {item['arguments']}: {item.get('reason', '')}"
@@ -289,6 +303,31 @@ class ZXCodeApp(App):
                 self.notice(f"工具调用已被安全策略拦截：\n{blocked}")
         self.request_started = 0.0
         self.set_status(status)
+
+    @work(exclusive=True)
+    async def compact(self) -> None:
+        """Manually run layer 1 + layer 2; the breaker never blocks manual use."""
+        if self.active_worker and self.active_worker.is_running:
+            self.notice("正在生成，请稍后再执行 /compact")
+            return
+        if not self.session.messages:
+            self.notice("没有可压缩的内容")
+            return
+        self.set_status("压缩中")
+        try:
+            messages, outcome = await self.compressor.manual_compress(
+                self.session.messages, self.session.model
+            )
+        except CompressionFailure as error:
+            self.notice(f"压缩失败：{error.message}")
+            self.set_status("就绪")
+            return
+        if outcome.changed:
+            self.session.messages = messages
+            self.notice(f"压缩完成：{outcome.removed_messages} 条旧消息已替换为摘要。")
+        else:
+            self.notice("没有可压缩的内容")
+        self.set_status("就绪")
 
     def _abandon(
         self, user_text: str, assistant: Static, answer: str, status: str

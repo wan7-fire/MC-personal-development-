@@ -34,6 +34,24 @@ class ChatSession:
             {"role": "user", "content": user_text},
         ]
 
+    def prepare_request(
+        self,
+        user_text: str,
+        compressor=None,
+        dynamic_messages: Sequence[Mapping[str, Any]] = (),
+    ) -> list[dict[str, Any]]:
+        """Run the idempotent layer-1 recheck, then assemble the request."""
+        if compressor is not None:
+            self.messages = compressor.recheck(self.messages)
+        return self.request_messages(user_text, dynamic_messages)
+
+    def rebuild_from_history(self, history: Sequence[Mapping[str, Any]]) -> None:
+        """Persist the loop's final history, stripping the system prefix."""
+        index = 0
+        while index < len(history) and history[index].get("role") == "system":
+            index += 1
+        self.messages = [dict(message) for message in history[index:]]
+
     def commit(self, user_text: str, assistant_text: str) -> None:
         self.commit_messages(
             user_text, [{"role": "assistant", "content": assistant_text}]

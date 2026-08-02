@@ -1,9 +1,18 @@
 import asyncio
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from zxcode.agent import AgentComplete, AgentLoop
 from zxcode.client import AssistantMessage, ReasoningDelta, TextDelta
+from zxcode.compress import (
+    BEGIN_SUMMARY,
+    BOUNDARY_MESSAGE,
+    CompressionConfig,
+    CompressionManager,
+    END_SUMMARY,
+)
 from zxcode.config import AgentConfig
 from zxcode.events import EventChannel, EventType
 from zxcode.state import LoopState
@@ -597,6 +606,104 @@ class StateTests(unittest.IsolatedAsyncioTestCase):
                 "TERMINATED",
             },
         )
+
+
+class CompressionLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_oversized_tool_result_is_spooled_before_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            compressor = CompressionManager(Path(directory))
+            client = FakeClient(
+                [
+                    [
+                        AssistantMessage(
+                            {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    tool_call(1, arguments={"text": "z" * 9000})
+                                ],
+                            }
+                        )
+                    ],
+                    [AssistantMessage({"role": "assistant", "content": "完成"})],
+                ]
+            )
+            registry = ToolRegistry([EchoTool()])
+            agent = AgentLoop(
+                client,
+                registry,
+                ToolExecutor(registry),
+                compressor=compressor,
+            )
+
+            completed, _ = await drive(
+                agent, [{"role": "user", "content": "go"}]
+            )
+
+            self.assertIsNotNone(completed.final_history)
+            tool_messages = [
+                message
+                for message in completed.final_history
+                if message.get("role") == "tool"
+            ]
+            self.assertEqual(len(tool_messages), 1)
+            self.assertIn("已溢出", tool_messages[0]["content"])
+            self.assertIn(".zxcode/spool/", tool_messages[0]["content"])
+            self.assertEqual(
+                len(list((Path(directory) / ".zxcode/spool").glob("*.txt"))), 1
+            )
+
+    async def test_history_is_compressed_before_request_when_over_trigger(self):
+        class SplitClient:
+            def __init__(self):
+                self.requests = []
+
+            async def stream_events(self, messages, model=None, tools=None):
+                self.requests.append((list(messages), model, tools))
+                if not tools:
+                    yield TextDelta("草稿")
+                    yield TextDelta(
+                        f"{BEGIN_SUMMARY}\n## 主要请求\n汇总\n{END_SUMMARY}"
+                    )
+                    yield AssistantMessage(
+                        {"role": "assistant", "content": "草稿"}
+                    )
+                    return
+                yield AssistantMessage({"role": "assistant", "content": "完成"})
+
+        with tempfile.TemporaryDirectory() as directory:
+            compressor = CompressionManager(
+                Path(directory),
+                CompressionConfig(context_window=2000),
+                client=SplitClient(),
+            )
+            registry = ToolRegistry([EchoTool()])
+            agent = AgentLoop(
+                compressor.client,
+                registry,
+                ToolExecutor(registry),
+                compressor=compressor,
+            )
+            messages = [
+                {"role": "system", "content": "stable"},
+                {"role": "user", "content": "u1"},
+                {"role": "assistant", "content": "a" * 7000},
+                {"role": "user", "content": "u2"},
+            ]
+
+            completed, _ = await drive(agent, messages)
+
+            self.assertEqual(compressor.client.requests[0][2], ())
+            self.assertIsNotNone(completed.final_history)
+            contents = [
+                message.get("content") for message in completed.final_history
+            ]
+            self.assertIn(BOUNDARY_MESSAGE, contents)
+            self.assertTrue(
+                any("## 主要请求" in (content or "") for content in contents)
+            )
+            self.assertIn(
+                {"role": "user", "content": "u2"}, completed.final_history
+            )
 
 
 if __name__ == "__main__":

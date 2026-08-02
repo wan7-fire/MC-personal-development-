@@ -10,6 +10,7 @@ from typing import Any
 
 from .cancel import CancelToken
 from .client import AssistantMessage, ChatClient, ReasoningDelta, TextDelta
+from .compress import CompressionManager
 from .config import AgentConfig, TerminationReason
 from .dispatch import ToolDispatcher
 from .events import Event, EventChannel, EventType
@@ -32,6 +33,7 @@ class AgentComplete:
     messages: list[dict[str, Any]]
     termination_reason: str = TerminationReason.END_TURN
     blocked_calls: list[dict[str, Any]] = field(default_factory=list)
+    final_history: list[dict[str, Any]] | None = None
 
 
 class AgentLoop:
@@ -42,12 +44,14 @@ class AgentLoop:
         executor: ToolExecutor,
         config: AgentConfig | None = None,
         context: ToolContext | None = None,
+        compressor: CompressionManager | None = None,
     ) -> None:
         self.client = client
         self.registry = registry
         self.executor = executor
         self.config = config or AgentConfig()
         self.context = context or ToolContext()
+        self.compressor = compressor
 
     @property
     def max_turns(self) -> int:
@@ -107,6 +111,8 @@ class AgentLoop:
                 self._check_cancel(config.cancel_token)
                 state.transition("start" if turn == 0 else "tool_done")
 
+                if self.compressor is not None:
+                    history = await self.compressor.prepare(history, model)
                 assistant, text = await self._call_model(
                     history, model, channel, turn, config
                 )
@@ -128,6 +134,7 @@ class AgentLoop:
                         TerminationReason.END_TURN,
                         blocked_calls,
                         turn,
+                        history,
                     )
 
                 self._check_cancel(config.cancel_token)
@@ -142,11 +149,11 @@ class AgentLoop:
                 results = iter(outcome.results)
 
                 decision = TerminationDecision(False)
+                tool_messages: list[dict[str, Any]] = []
                 for call, item in zip(calls, prepared):
                     result = next(results) if isinstance(item, ToolCall) else item
                     tool_message = _tool_message(str(call.get("id", "")), result)
-                    history.append(tool_message)
-                    turn_messages.append(tool_message)
+                    tool_messages.append(tool_message)
                     await channel.emit(
                         Event(
                             type=EventType.TOOL_RESULT,
@@ -162,6 +169,11 @@ class AgentLoop:
                     checked = self._guard(terminator, turn, item, result, progress)
                     if not decision.should_stop and checked.should_stop:
                         decision = checked
+                if self.compressor is not None:
+                    tool_messages, _ = self.compressor.spool_batch(tool_messages)
+                for tool_message in tool_messages:
+                    history.append(tool_message)
+                    turn_messages.append(tool_message)
 
                 if not decision.should_stop:
                     decision = terminator.check(
@@ -175,7 +187,12 @@ class AgentLoop:
                     state.transition("tool_done")
                     state.transition("terminate", decision.reason)
                     return self._complete(
-                        "", turn_messages, decision.reason, blocked_calls, turn
+                        "",
+                        turn_messages,
+                        decision.reason,
+                        blocked_calls,
+                        turn,
+                        history,
                     )
 
                 await self._emit_turn_end(channel, turn, "continue")
@@ -187,7 +204,12 @@ class AgentLoop:
             if state.can("terminate"):
                 state.transition("terminate", TerminationReason.MAX_TURNS)
             return self._complete(
-                "", turn_messages, TerminationReason.MAX_TURNS, blocked_calls, turn
+                "",
+                turn_messages,
+                TerminationReason.MAX_TURNS,
+                blocked_calls,
+                turn,
+                history,
             )
 
         except _Cancelled:
@@ -204,7 +226,12 @@ class AgentLoop:
             if state.can("cleanup_done"):
                 state.transition("cleanup_done")
             return self._complete(
-                "", turn_messages, TerminationReason.CANCELLED, blocked_calls, turn
+                "",
+                turn_messages,
+                TerminationReason.CANCELLED,
+                blocked_calls,
+                turn,
+                history,
             )
 
         except Exception as error:
@@ -221,7 +248,12 @@ class AgentLoop:
                 )
             )
             return self._complete(
-                "", turn_messages, TerminationReason.ERROR, blocked_calls, turn
+                "",
+                turn_messages,
+                TerminationReason.ERROR,
+                blocked_calls,
+                turn,
+                history,
             )
 
     # ── internals ────────────────────────────────────────────────────────
@@ -233,9 +265,16 @@ class AgentLoop:
         reason: str,
         blocked_calls: list[dict[str, Any]],
         turn: int,
+        history: list[dict[str, Any]] | None = None,
     ) -> tuple[AgentComplete, int]:
         return (
-            AgentComplete(text, turn_messages, reason, list(blocked_calls)),
+            AgentComplete(
+                text,
+                turn_messages,
+                reason,
+                list(blocked_calls),
+                list(history) if history is not None else None,
+            ),
             turn,
         )
 

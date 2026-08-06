@@ -15,6 +15,7 @@ SYSTEM_PROMPT = build_stable_prompt()
 class ChatSession:
     model: str
     messages: list[dict[str, Any]] = field(default_factory=list)
+    instructions: list[dict[str, Any]] = field(default_factory=list)
     prompt_root: Path = field(default_factory=Path.cwd)
 
     @property
@@ -29,6 +30,7 @@ class ChatSession:
         return [
             {"role": "system", "content": build_stable_prompt(root=self.prompt_root)},
             build_environment_message(self.prompt_root),
+            *(dict(message) for message in self.instructions),
             *(dict(message) for message in dynamic_messages),
             *self.messages,
             {"role": "user", "content": user_text},
@@ -51,6 +53,16 @@ class ChatSession:
         while index < len(history) and history[index].get("role") == "system":
             index += 1
         self.messages = [dict(message) for message in history[index:]]
+
+    def inject_instructions(
+        self, instruction_messages: Sequence[Mapping[str, Any]]
+    ) -> None:
+        """Replace the session instruction messages injected into requests."""
+        self.instructions = [
+            dict(message)
+            for message in instruction_messages
+            if message.get("role") == "system" and message.get("content")
+        ]
 
     def commit(self, user_text: str, assistant_text: str) -> None:
         self.commit_messages(

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -124,6 +125,20 @@ class TrackingApp(ZXCodeApp):
 
 
 class AppTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._sessions_tmp = tempfile.TemporaryDirectory()
+        self._env_patch = patch.dict(
+            os.environ,
+            {
+                "ZXCODE_SESSIONS_DIR": str(
+                    Path(self._sessions_tmp.name) / "sessions"
+                )
+            },
+        )
+        self._env_patch.start()
+        self.addCleanup(self._env_patch.stop)
+        self.addCleanup(self._sessions_tmp.cleanup)
+
     def test_default_registry_exposes_six_builtin_tools(self):
         app = ZXCodeApp(Settings("secret", "https://example.test/v1", "model-a"), FakeClient())
 

@@ -99,7 +99,10 @@ async def _security_guard(
 
 class ReadFile(Tool):
     name = "ReadFile"
-    description = "Read a UTF-8 project file with optional inclusive line bounds."
+    description = (
+        "Read a UTF-8 project file. Line bounds are optional and inclusive; "
+        "out-of-bounds ranges are clamped to the file."
+    )
     input_schema = {
         "type": "object",
         "properties": {
@@ -107,7 +110,7 @@ class ReadFile(Tool):
             "start_line": {"type": ["integer", "null"], "minimum": 1},
             "end_line": {"type": ["integer", "null"], "minimum": 1},
         },
-        "required": ["path", "start_line", "end_line"],
+        "required": ["path"],
         "additionalProperties": False,
     }
 
@@ -130,17 +133,31 @@ class ReadFile(Tool):
             return loaded
         text, data = loaded
         lines = text.splitlines()
+        total = len(lines)
         first = start or 1
-        last = end or len(lines)
-        if first > max(len(lines), 1) or last > len(lines):
-            return failure("invalid_arguments", "invalid arguments: line range is outside file")
+        last = end if end is not None else total
+        clamped = False
+        if end is not None and end > total:
+            last = total
+            clamped = True
+        if first > total:
+            first = total + 1
+            last = total
+            clamped = True
         output = "\n".join(
             f"{number}: {lines[number - 1]}" for number in range(first, last + 1)
         )
+        metadata = {
+            "sha256": _sha256(data),
+            "size": len(data),
+            "total_lines": total,
+        }
+        if clamped:
+            metadata["clamped"] = True
         return ToolResult(
             True,
             output,
-            metadata={"sha256": _sha256(data), "size": len(data)},
+            metadata=metadata,
         )
 
 

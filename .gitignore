@@ -8,6 +8,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
+.zxcode/
 
 # Local secrets
 .env

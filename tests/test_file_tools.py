@@ -29,6 +29,48 @@ class FileToolTests(unittest.IsolatedAsyncioTestCase):
             result.metadata["sha256"], hashlib.sha256(path.read_bytes()).hexdigest()
         )
 
+    async def test_read_file_clamps_end_beyond_eof(self):
+        path = self.root / "sample.txt"
+        path.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+        result = await ReadFile().execute(
+            {"path": "sample.txt", "start_line": 2, "end_line": 999},
+            ToolContext(self.root),
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.output, "2: two\n3: three")
+        self.assertEqual(result.metadata["total_lines"], 3)
+        self.assertTrue(result.metadata["clamped"])
+
+    async def test_read_file_start_beyond_eof_is_success_with_metadata(self):
+        path = self.root / "sample.txt"
+        path.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+        result = await ReadFile().execute(
+            {"path": "sample.txt", "start_line": 10, "end_line": 10},
+            ToolContext(self.root),
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.output, "")
+        self.assertEqual(result.metadata["total_lines"], 3)
+        self.assertTrue(result.metadata["clamped"])
+
+    async def test_read_file_whole_file_when_bounds_omitted(self):
+        path = self.root / "sample.txt"
+        path.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+        result = await ReadFile().execute(
+            {"path": "sample.txt", "start_line": None, "end_line": None},
+            ToolContext(self.root),
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.output, "1: one\n2: two\n3: three")
+        self.assertEqual(result.metadata["total_lines"], 3)
+        self.assertNotIn("clamped", result.metadata)
+
     async def test_read_file_rejects_path_escape_and_invalid_utf8(self):
         outside = self.root.parent / "outside-zxcode-test.txt"
         outside.write_text("secret", encoding="utf-8")

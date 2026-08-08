@@ -45,6 +45,7 @@ class AgentLoop:
         config: AgentConfig | None = None,
         context: ToolContext | None = None,
         compressor: CompressionManager | None = None,
+        skill_manager=None,
     ) -> None:
         self.client = client
         self.registry = registry
@@ -52,6 +53,7 @@ class AgentLoop:
         self.config = config or AgentConfig()
         self.context = context or ToolContext()
         self.compressor = compressor
+        self.skill_manager = skill_manager
 
     @property
     def max_turns(self) -> int:
@@ -110,6 +112,7 @@ class AgentLoop:
             for turn in range(config.max_turns):
                 self._check_cancel(config.cancel_token)
                 state.transition("start" if turn == 0 else "tool_done")
+                self._apply_skill_context(history)
 
                 if self.compressor is not None:
                     history = await self.compressor.prepare(history, model)
@@ -288,6 +291,26 @@ class AgentLoop:
             index += 1
         history.insert(index, plan_only_message())
 
+    def _apply_skill_context(self, history: list[dict[str, Any]]) -> None:
+        if self.skill_manager is None:
+            return
+        messages = self.skill_manager.active_skill_messages()
+        if not messages:
+            return
+        history[:] = [
+            message
+            for message in history
+            if not (
+                message.get("role") == "system"
+                and str(message.get("content", "")).startswith("[Skill 指令：")
+            )
+        ]
+        index = 0
+        while index < len(history) and history[index].get("role") == "system":
+            index += 1
+        insert_at = min(1, index)
+        history[insert_at:insert_at] = [dict(message) for message in messages]
+
     def _check_cancel(self, token: CancelToken) -> None:
         if token.is_cancelled():
             raise _Cancelled
@@ -332,7 +355,13 @@ class AgentLoop:
         stream_events = getattr(self.client, "stream_events", None)
         if stream_events is not None:
             async for event in stream_events(
-                request, model, self.registry.definitions()
+                request,
+                model,
+                self.registry.definitions(
+                    self.skill_manager.active_tool_names()
+                    if self.skill_manager is not None
+                    else None
+                ),
             ):
                 yield event
             return

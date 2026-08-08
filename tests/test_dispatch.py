@@ -261,6 +261,38 @@ class SecurityPrecheckTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome.results[0].error["code"], "security_blocked")
         self.assertEqual(len(outcome.blocked_calls), 1)
 
+    async def test_bash_asks_for_confirmation_exactly_once(self):
+        from zxcode.tools import Bash
+
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory)
+            registry = ToolRegistry([Bash()])
+            channel = EventChannel()
+            dispatcher = ToolDispatcher(registry, ToolExecutor(registry), channel)
+            policy = load_policy(root)
+            confirmations = []
+
+            async def confirm(title, detail):
+                confirmations.append(title)
+                return "once"
+
+            outcome = await dispatcher.dispatch(
+                [
+                    ToolCall(
+                        "bash-1",
+                        "Bash",
+                        {"command": "Set-Content created.txt hello"},
+                    )
+                ],
+                ToolContext(root, confirm, policy),
+                AgentConfig(),
+                0,
+            )
+            channel.close()
+
+        self.assertEqual(len(confirmations), 1)
+        self.assertTrue(outcome.results[0].success)
+
 
 if __name__ == "__main__":
     unittest.main()

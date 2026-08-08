@@ -83,6 +83,7 @@ class SecurityPolicy:
     rules: list[SecurityRule] = field(default_factory=list)
     config_path: Path | None = None
     session_rules: dict[tuple[str, str, str], str] = field(default_factory=dict)
+    script_roots: tuple[Path, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         self.root = self.root.resolve()
@@ -138,6 +139,31 @@ class SecurityPolicy:
             return SecurityDecision(ALLOW, "allowed by mode or new-file policy", tool, "path", signature)
         return SecurityDecision(ASK, f"{tool} will modify an existing file", tool, "path", signature)
 
+    def evaluate_script(self, tool: str, script_path: Path) -> SecurityDecision:
+        script = Path(script_path).resolve(strict=False)
+        signature = self.path_signature(script)
+        if not self.is_script_path_allowed(script):
+            return SecurityDecision(
+                DENY,
+                "script is outside allowed roots",
+                tool,
+                "script",
+                signature,
+                code="path_outside_root",
+            )
+        ruled = self._rule_decision(tool, "script", signature)
+        if ruled is not None:
+            return ruled
+        if self.mode == "strict":
+            return SecurityDecision(
+                DENY, "strict mode requires an allow rule", tool, "script", signature
+            )
+        if self.mode == "allow":
+            return SecurityDecision(ALLOW, "allowed by mode", tool, "script", signature)
+        return SecurityDecision(
+            ASK, f"{tool} will execute a skill script", tool, "script", signature
+        )
+
     async def guard_call(
         self, tool: str, arguments: Mapping[str, Any], context: ToolContext, *, prompt: bool = True
     ) -> "ToolResult | None":
@@ -163,12 +189,37 @@ class SecurityPolicy:
     ) -> "ToolResult | None":
         return await self._guard(self.evaluate_file(tool, path, exists=exists), context, prompt)
 
+    async def guard_script(
+        self, tool: str, script_path: Path, context: ToolContext, *, prompt: bool = True
+    ) -> "ToolResult | None":
+        return await self._guard(
+            self.evaluate_script(tool, script_path), context, prompt
+        )
+
     def is_path_allowed(self, path: Path) -> bool:
         try:
             candidate = path.resolve(strict=False)
         except (OSError, RuntimeError):
             return False
         return any(candidate.is_relative_to(root) for root in self.allowed_roots)
+
+    def is_script_path_allowed(self, path: Path) -> bool:
+        try:
+            candidate = path.resolve(strict=False)
+        except (OSError, RuntimeError):
+            return False
+        return any(
+            candidate.is_relative_to(root)
+            for root in (*self.allowed_roots, *self.script_roots)
+        )
+
+    def allow_script_root(self, path: Path) -> None:
+        resolved = Path(path).resolve(strict=False)
+        if resolved not in self.script_roots:
+            self.script_roots = (*self.script_roots, resolved)
+
+    def clear_script_roots(self) -> None:
+        self.script_roots = ()
 
     def path_signature(self, path: Path) -> str:
         try:
@@ -291,14 +342,26 @@ def is_read_only_command(command: str) -> bool:
     return True
 
 
+def _flag_like_path(raw: str) -> bool:
+    # ponytail: single-segment /flag is cmd.exe/CLI syntax, not a root path
+    return (
+        raw.startswith("/")
+        and not raw.startswith("//")
+        and "/" not in raw[1:]
+        and "." not in raw
+    )
+
+
 def command_path_policy(command: str, root: Path) -> str | None:
     if _PARENT.search(command) or _HOME.search(command) or _PROVIDER.search(command):
         return "outside"
     absolute = False
     project = root.resolve()
     for match in _ABSOLUTE.finditer(command):
-        absolute = True
         raw = match.group(0).rstrip(",)")
+        if _flag_like_path(raw):
+            continue
+        absolute = True
         try:
             if not Path(raw).resolve(strict=False).is_relative_to(project):
                 return "outside"
@@ -306,6 +369,10 @@ def command_path_policy(command: str, root: Path) -> str | None:
             return "outside"
     for word in _WORDS.findall(command)[1:]:
         raw = word.strip("'\"")
+        if _flag_like_path(raw):
+            continue
+        if any(ch in raw for ch in "<>|"):
+            continue
         candidate = project / raw
         if not candidate.exists() and "/" not in raw and "\\" not in raw:
             continue

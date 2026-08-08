@@ -18,3 +18,6 @@ zxcode = "zxcode.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["zxcode*"]
+
+[tool.setuptools.package-data]
+zxcode = ["skills/builtin/**/*.md"]

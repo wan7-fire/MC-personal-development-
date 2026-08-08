@@ -1,3 +1,4 @@
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -141,6 +142,120 @@ signature = "git commit -m hello"
         self.assertIsInstance(shell, ToolResult)
         self.assertEqual(shell.error["code"], "security_blocked")
         self.assertEqual(path.error["code"], "path_outside_root")
+
+    async def test_script_decision_default_asks_allow_mode_allows_strict_denies(self):
+        policy = load_policy(self.root)
+        script = self.root / "tools" / "echo.py"
+        script.parent.mkdir(parents=True)
+        script.write_text("", encoding="utf-8")
+
+        self.assertEqual(policy.evaluate_script("echo", script).action, "ask")
+        policy.mode = "allow"
+        self.assertEqual(policy.evaluate_script("echo", script).action, "allow")
+        policy.mode = "strict"
+        self.assertEqual(policy.evaluate_script("echo", script).action, "deny")
+
+    async def test_script_rule_allows_specific_script(self):
+        policy = load_policy(self.root)
+        script = self.root / "tools" / "echo.py"
+        script.parent.mkdir(parents=True)
+        script.write_text("", encoding="utf-8")
+        policy.rules.append(
+            SecurityRule("echo", "allow", "script", "tools/echo.py")
+        )
+
+        decision = policy.evaluate_script("echo", script)
+
+        self.assertEqual(decision.action, "allow")
+        self.assertEqual(decision.reason, "project rule")
+
+    async def test_guard_script_asks_in_default_mode_without_confirm(self):
+        policy = load_policy(self.root)
+        script = self.root / "tools" / "echo.py"
+        script.parent.mkdir(parents=True)
+        script.write_text("", encoding="utf-8")
+
+        blocked = await policy.guard_script(
+            "echo", script, self._context(policy)
+        )
+
+        self.assertEqual(blocked.error["code"], "permission_denied")
+
+    async def test_guard_script_outside_root_blocked_without_prompt(self):
+        policy = load_policy(self.root)
+        outside = self.root.parent / "evil.py"
+
+        decision = policy.evaluate_script("echo", outside)
+        self.assertEqual(decision.action, "deny")
+        self.assertEqual(decision.code, "path_outside_root")
+
+        blocked = await policy.guard_script(
+            "echo", outside, self._context(policy)
+        )
+        self.assertEqual(blocked.error["code"], "path_outside_root")
+
+    async def test_approved_script_root_allows_outside_scripts_to_reach_policy(self):
+        policy = load_policy(self.root)
+        outside = self.root.parent / "user-skills"
+        try:
+            script = outside / "pkg" / "tools" / "echo.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("", encoding="utf-8")
+
+            self.assertEqual(
+                policy.evaluate_script("echo", script).code, "path_outside_root"
+            )
+
+            policy.allow_script_root(script.parent)
+            self.assertEqual(policy.evaluate_script("echo", script).action, "ask")
+
+            policy.mode = "allow"
+            self.assertEqual(policy.evaluate_script("echo", script).action, "allow")
+            policy.mode = "strict"
+            self.assertEqual(policy.evaluate_script("echo", script).action, "deny")
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
+
+    async def test_guard_script_prompts_after_script_root_approved(self):
+        policy = load_policy(self.root)
+        outside = self.root.parent / "user-skills"
+        try:
+            script = outside / "pkg" / "tools" / "echo.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("", encoding="utf-8")
+            policy.allow_script_root(script.parent)
+
+            async def confirm(title, detail):
+                return "once"
+
+            blocked = await policy.guard_script(
+                "echo", script, self._context(policy, confirm)
+            )
+
+            self.assertIsNone(blocked)
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
+
+    async def test_cmd_flag_slash_is_not_treated_as_absolute_path(self):
+        policy = load_policy(self.root)
+
+        decision = policy.evaluate_shell("cmd /c echo hi", self.root)
+
+        self.assertEqual(decision.action, "ask")
+        self.assertNotEqual(decision.code, "path_outside_root")
+
+    async def test_redirection_in_quoted_command_is_not_misclassified_as_path(self):
+        policy = load_policy(self.root)
+        command = (
+            'cmd /c ".\\venv\\Scripts\\python.exe -m unittest discover -s tests '
+            '-v test_out.txt 2>&1";$code $LASTEXITCODE;"exit=$code";'
+            "Get-Content test_out.txt -Tail 3"
+        )
+
+        decision = policy.evaluate_shell(command, self.root)
+
+        self.assertEqual(decision.action, "ask")
+        self.assertNotEqual(decision.code, "path_outside_root")
 
 
 if __name__ == "__main__":

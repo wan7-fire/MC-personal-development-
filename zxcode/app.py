@@ -18,15 +18,25 @@ from textual.worker import Worker
 from .agent import AgentComplete, AgentLoop
 from .cancel import CancelToken
 from .client import ChatClient, Settings, friendly_error, friendly_error_name
+from .commands.builtins import register_builtins
+from .commands.dispatcher import CommandContext, dispatch_command
+from .commands.parser import parse
+from .commands.registry import CommandRegistry
+from .commands.skills import register_skill_commands, register_skill_shortcut
+from .commands.ui import TextualUI
 from .compress import CompressionConfig, CompressionFailure, CompressionManager
 from .config import AgentConfig
 from .events import EventChannel, EventType
-from .instructions import load_instructions
+from .instructions import default_user_dir, load_instructions
 from .mcp import ConfigError, McpConfig, McpManager
 from .notes import NotesManager
 from .recovery import recover_session
 from .security import load_policy
 from .session import ChatSession
+from .skills.install_tool import InstallSkill
+from .skills.load_skill import LoadSkill
+from .skills.loader import scan_skills
+from .skills.manager import SkillActivationError, SkillManager
 from .storage import SessionMeta, SessionStore, default_sessions_dir
 from .tools import (
     Bash,
@@ -151,6 +161,48 @@ class SessionPickerScreen(ModalScreen[str]):
         self.dismiss(None)
 
 
+class CommandPickerScreen(ModalScreen[str]):
+    """Modal list for multi-match tab completion; dismisses with a name."""
+
+    CSS = """
+    CommandPickerScreen { align: center middle; }
+    #command-picker {
+        width: 60%;
+        max-width: 80;
+        height: auto;
+        max-height: 60%;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #command-picker-title { margin-bottom: 1; text-style: bold; }
+    #command-picker-list { height: auto; max-height: 20; }
+    """
+
+    BINDINGS = [Binding("escape", "dismiss_picker", "取消")]
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__()
+        self.names = list(names)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="command-picker"):
+            yield Label("选择命令（方向键选择，Enter 确认，Esc 取消）", id="command-picker-title")
+            with ListView(id="command-picker-list"):
+                for name in self.names:
+                    yield ListItem(Label(f"/{name}"))
+
+    def on_mount(self) -> None:
+        self.query_one("#command-picker-list", ListView).focus()
+
+    @on(ListView.Selected, "#command-picker-list")
+    def pick(self, event: ListView.Selected) -> None:
+        self.dismiss(self.names[event.index])
+
+    def action_dismiss_picker(self) -> None:
+        self.dismiss(None)
+
+
 def _resume_summary_lines(report) -> list[str]:
     lines = [
         f"已恢复会话 {report.session_id}：{report.restored_messages} 条消息"
@@ -190,6 +242,7 @@ class ZXCodeApp(App):
             key_display="Ctrl+Enter / Ctrl+S",
             priority=True,
         ),
+        Binding("tab", "command_complete", "补全", priority=True),
         Binding("ctrl+c", "interrupt", "取消/退出", priority=True),
     ]
 
@@ -227,6 +280,27 @@ class ZXCodeApp(App):
         self.compressor = compressor or CompressionManager(
             Path.cwd(), CompressionConfig(), client=self.client
         )
+        self.skill_manager = SkillManager(
+            scan_skills(
+                Path.cwd(),
+                default_user_dir(),
+                Path(__file__).resolve().parent / "skills" / "builtin",
+                self.registry,
+            ),
+            self.registry,
+            root=Path.cwd(),
+            user_dir=default_user_dir(),
+            builtin_root=Path(__file__).resolve().parent / "skills" / "builtin",
+            client=self.client,
+            config=self.config,
+            context=ToolContext(Path.cwd(), self.confirm_tool, self.security),
+            messages_provider=lambda: self.session.messages,
+            model_provider=lambda: self.session.model,
+        )
+        self.registry.register(LoadSkill(self.skill_manager))
+        self.registry.register(
+            InstallSkill(self.skill_manager, on_installed=self.rescan_skills)
+        )
         self.agent = agent or AgentLoop(
             self.client,
             self.registry,
@@ -234,6 +308,7 @@ class ZXCodeApp(App):
             config=self.config,
             context=ToolContext(Path.cwd(), self.confirm_tool, self.security),
             compressor=self.compressor,
+            skill_manager=self.skill_manager,
         )
         self.session = ChatSession(settings.model)
         self.store = store or SessionStore(default_sessions_dir())
@@ -243,17 +318,24 @@ class ZXCodeApp(App):
         self.resume_worker = None
         self.sessions_worker = None
         self.notes_worker = None
+        self.command_registry = CommandRegistry()
+        self.command_context = CommandContext(
+            self.command_registry, TextualUI(self)
+        )
+        register_builtins(self.command_registry, self.command_context)
+        register_skill_commands(self.command_registry, self.skill_manager)
         loaded_instructions = load_instructions(Path.cwd())
+        skill_index = self._skill_index_message()
         self.instruction_messages = [
-            loaded.to_message() for loaded in loaded_instructions
+            *(loaded.to_message() for loaded in loaded_instructions),
+            *([skill_index] if skill_index else []),
         ]
         self.instruction_issues = [
             issue.message
             for loaded in loaded_instructions
             for issue in loaded.issues
         ]
-        if self.instruction_messages:
-            self.session.inject_instructions(self.instruction_messages)
+        self._refresh_skill_index()
         self.active_worker: Worker | None = None
         self.compact_worker: Worker | None = None
         self.request_started = 0.0
@@ -266,6 +348,92 @@ class ZXCodeApp(App):
             if self.screen is screen:
                 screen.dismiss("deny")
             raise
+
+    def _skill_index_message(self) -> dict | None:
+        metas = self.skill_manager.list_skills()
+        if not metas:
+            return None
+        lines = ["可用 Skills："]
+        lines.extend(f"- {meta.name}: {meta.description}" for meta in metas)
+        return {"role": "system", "content": "\n".join(lines)}
+
+    def _refresh_skill_index(self) -> None:
+        self.instruction_messages = [
+            message
+            for message in self.instruction_messages
+            if not (
+                message.get("role") == "system"
+                and str(message.get("content", "")).startswith("可用 Skills：")
+            )
+        ]
+        new_index = self._skill_index_message()
+        if new_index:
+            self.instruction_messages.append(new_index)
+        self.session.inject_instructions(self.instruction_messages)
+
+    def rescan_skills(self) -> list:
+        issues = self.skill_manager.rescan()
+        for meta in self.skill_manager.list_skills():
+            if self.command_registry.get(meta.name) is None:
+                register_skill_shortcut(self.command_registry, meta)
+        self._refresh_skill_index()
+        return issues
+
+    async def run_skill(self, name: str, args: str = "") -> None:
+        meta = self.skill_manager.get(name)
+        if meta is None:
+            self.notice(f"未知 Skill：{name}")
+            return
+        try:
+            await self.skill_manager.confirm_activate(name)
+        except SkillActivationError as error:
+            self.notice(f"Skill {name} 无法激活：{error}")
+            return
+        if meta.mode == "shared":
+            text = f"执行 Skill {name}：{args.strip() or meta.description}"
+            self._send_user_message(text)
+            return
+        self.notice(f"隔离执行 Skill {name}…")
+        try:
+            summary = await self.skill_manager.run_isolated(
+                name, user_text=args.strip() or None
+            )
+        except Exception as error:
+            self.notice(f"Skill {name} 执行失败：{error}")
+            return
+        user_text = f"执行 Skill {name}：{args.strip() or meta.description}"
+        self.session.commit_messages(
+            user_text, [{"role": "assistant", "content": summary}]
+        )
+        self._persist_skill_turn(user_text, summary)
+        messages = self.query_one("#messages", VerticalScroll)
+        messages.mount(Static(f"You:\n{user_text}", classes="message user", markup=False))
+        messages.mount(
+            Static(f"ZXCode:\n{summary}", classes="message assistant", markup=False)
+        )
+
+    def _send_user_message(self, text: str) -> None:
+        messages = self.query_one("#messages", VerticalScroll)
+        messages.mount(Static(f"You:\n{text}", classes="message user", markup=False))
+        assistant = Static("ZXCode:\n", classes="message assistant", markup=False)
+        messages.mount(assistant)
+        self.request_started = monotonic()
+        self.active_worker = self.generate(text, assistant)
+
+    def _persist_skill_turn(self, user_text: str, summary: str) -> None:
+        if self.session_id is None:
+            self.session_id = uuid4().hex
+        try:
+            self.store.append_messages(
+                self.session_id,
+                [
+                    {"role": "user", "content": user_text},
+                    {"role": "assistant", "content": summary},
+                ],
+                self.session.model,
+            )
+        except OSError:
+            self.notice("会话存档写入失败")
 
     def compose(self) -> ComposeResult:
         yield Static(id="status")
@@ -313,8 +481,10 @@ class ZXCodeApp(App):
     def set_status(self, state: str) -> None:
         elapsed = monotonic() - self.request_started if self.request_started else 0.0
         plan = "  |  plan-only" if self.config.plan_only else ""
+        mode = "计划" if self.config.plan_only else "执行"
         self.query_one("#status", Static).update(
-            f"模型: {self.session.model}  |  {self.session.turns} 轮  |  {state}  |  {elapsed:.1f}s{plan}"
+            f"模型: {self.session.model}  |  {self.session.turns} 轮  |  {state}"
+            f"  |  {elapsed:.1f}s{plan}  |  模式: {mode}  |  命令: /help /status /compact"
         )
 
     def action_submit(self) -> None:
@@ -337,76 +507,11 @@ class ZXCodeApp(App):
         self.active_worker = self.generate(user_text, assistant)
 
     def handle_command(self, command: str) -> None:
-        name, _, argument = command.partition(" ")
-        if name == "/help":
-            self.notice(
-                "/help  /clear  /exit  /model <名称>  /plan  /compact"
-                "  /resume [ID]  /sessions  /notes"
-            )
-        elif name == "/plan":
-            self.config = self.config.with_plan_only(not self.config.plan_only)
-            if hasattr(self.agent, "config"):
-                self.agent.config = self.config
-            self.notice(
-                "已进入 plan-only 模式：写类工具将被拦截。"
-                if self.config.plan_only
-                else "已退出 plan-only 模式。"
-            )
-            self.set_status("就绪")
-        elif name == "/clear":
-            self.session.clear()
-            if self.instruction_messages:
-                self.session.inject_instructions(self.instruction_messages)
-            self.session_id = None
-            self.query_one("#messages", VerticalScroll).remove_children()
-            self.set_status("就绪")
-        elif name == "/exit":
-            self.exit()
-        elif name == "/model":
-            if argument.strip():
-                self.session.set_model(argument.strip())
-                self.notice(f"已切换模型：{self.session.model}")
-                self.set_status("就绪")
-            else:
-                self.notice("用法：/model <名称>")
-        elif name == "/compact":
-            self.compact_worker = self.compact()
-        elif name == "/resume":
-            if argument.strip():
-                self.resume_worker = self.resume_session(argument.strip())
-            else:
-                self.choose_session()
-        elif name == "/sessions":
-            self.handle_sessions(argument.strip())
-        elif name == "/notes":
-            self.handle_notes(argument.strip())
-        else:
-            self.notice(f"未知命令：{name}")
-
-    def handle_sessions(self, argument: str) -> None:
-        if not argument:
-            metas = self.store.list_meta()
-            if not metas:
-                self.notice("没有会话")
-                return
-            lines = [
-                f"{meta.id} | {meta.title} | {meta.message_count} 条 | {meta.updated_at}"
-                for meta in metas[:20]
-            ]
-            self.notice("会话列表：\n" + "\n".join(lines))
+        """Entry point for slash-command input; routes through the registry."""
+        invocation = parse(command)
+        if invocation is None:
             return
-        sub, _, rest = argument.partition(" ")
-        if sub == "delete":
-            if rest.strip():
-                self.sessions_worker = self.delete_session(rest.strip())
-            else:
-                self.notice("用法：/sessions delete <会话ID>")
-        elif sub == "clear":
-            self.sessions_worker = self.clear_sessions()
-        elif sub == "path":
-            self.notice(f"会话目录：{self.store.root}")
-        else:
-            self.notice(f"未知子命令：{sub}")
+        dispatch_command(self.command_context, invocation)
 
     def choose_session(self) -> None:
         metas = self.store.list_meta()
@@ -420,25 +525,6 @@ class ZXCodeApp(App):
     def _on_session_picked(self, session_id: str | None) -> None:
         if session_id:
             self.resume_worker = self.resume_session(session_id)
-
-    def handle_notes(self, argument: str) -> None:
-        sub, _, scope = argument.partition(" ")
-        if not sub:
-            self.show_notes("all")
-        elif sub == "view":
-            self.show_notes(scope or "all")
-        elif sub == "clear":
-            target = scope or "project"
-            if target in ("project", "user", "all"):
-                self.notes_worker = self.clear_notes(target)
-            else:
-                self.notice("用法：/notes clear [project|user|all]")
-        elif sub == "edit":
-            self.show_notes_paths(scope or "project")
-        elif sub == "path":
-            self.show_notes_paths(scope or "all")
-        else:
-            self.notice("用法：/notes [view|clear|edit|path] [project|user|all]")
 
     def show_notes(self, scope: str) -> None:
         user_path = self.notes.user_notes_path()
@@ -562,8 +648,43 @@ class ZXCodeApp(App):
         else:
             self.exit()
 
+    def action_command_complete(self) -> None:
+        """Tab completion for the command input; fall back to focus next."""
+        if isinstance(self.screen, ModalScreen):
+            self.action_focus_next()
+            return
+        input_box = self.query_one("#input", TextArea)
+        text = input_box.text
+        if not text.startswith("/"):
+            self.action_focus_next()
+            return
+        body = text[1:]
+        prefix = body.split(" ", 1)[0]
+        matches = self.command_registry.complete(prefix)
+        if not matches:
+            return
+        if len(matches) == 1:
+            input_box.load_text("/" + matches[0].name + body[len(prefix):])
+        else:
+            names = [meta.name for meta in matches]
+            self.push_screen(
+                CommandPickerScreen(names),
+                callback=lambda picked: self._apply_completion(picked, text),
+            )
+
+    def _apply_completion(self, picked: str | None, original: str) -> None:
+        if not picked:
+            return
+        body = original[1:]
+        prefix = body.split(" ", 1)[0]
+        self.query_one("#input", TextArea).load_text(
+            "/" + picked + body[len(prefix):]
+        )
+
     @work(exclusive=True)
-    async def generate(self, user_text: str, assistant: Static) -> None:
+    async def generate(
+        self, user_text: str, assistant: Static, system_parts=()
+    ) -> None:
         self.cancel_token.reset()
         self.set_status("连接中")
         answer = ""
@@ -571,7 +692,14 @@ class ZXCodeApp(App):
         channel = EventChannel()
         runner = asyncio.create_task(
             self.agent.run(
-                self.session.prepare_request(user_text, compressor=self.compressor),
+                self.session.prepare_request(
+                    user_text,
+                    compressor=self.compressor,
+                    dynamic_messages=[
+                        {"role": "system", "content": part}
+                        for part in system_parts
+                    ],
+                ),
                 self.session.model,
                 channel,
             )

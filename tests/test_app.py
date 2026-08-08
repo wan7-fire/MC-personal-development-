@@ -139,12 +139,21 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._env_patch.stop)
         self.addCleanup(self._sessions_tmp.cleanup)
 
-    def test_default_registry_exposes_six_builtin_tools(self):
+    def test_default_registry_exposes_builtin_tools(self):
         app = ZXCodeApp(Settings("secret", "https://example.test/v1", "model-a"), FakeClient())
 
         self.assertEqual(
             {definition["function"]["name"] for definition in app.registry.definitions()},
-            {"ReadFile", "WriteFile", "EditFile", "Bash", "Glob", "Grep"},
+            {
+                "ReadFile",
+                "WriteFile",
+                "EditFile",
+                "Bash",
+                "Glob",
+                "Grep",
+                "LoadSkill",
+                "InstallSkill",
+            },
         )
 
     async def test_generate_rebuilds_session_from_final_history(self):

@@ -97,7 +97,7 @@ class ToolDispatcher:
         security = getattr(context, "security", None)
         if security is not None:
             blocked = await security.guard_call(
-                call.name, call.arguments, context, prompt=call.name == "Bash"
+                call.name, call.arguments, context, prompt=False
             )
             if blocked is not None:
                 reason = (

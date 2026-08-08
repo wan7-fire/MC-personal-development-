@@ -85,5 +85,12 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
-    def definitions(self) -> list[dict[str, Any]]:
-        return [tool.definition() for tool in self._tools.values()]
+    def names(self) -> set[str]:
+        return set(self._tools)
+
+    def definitions(self, names: Iterable[str] | None = None) -> list[dict[str, Any]]:
+        if names is None:
+            tools = list(self._tools.values())
+        else:
+            tools = [self._tools[name] for name in sorted(names) if name in self._tools]
+        return [tool.definition() for tool in tools]

@@ -154,3 +154,7 @@ async def _kill_tree(process: asyncio.subprocess.Process) -> None:
         await asyncio.wait_for(process.wait(), 1)
     except TimeoutError:
         process.kill()
+        try:
+            await asyncio.wait_for(process.wait(), 1)
+        except TimeoutError:
+            pass

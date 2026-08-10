@@ -22,6 +22,7 @@ from .commands.builtins import register_builtins
 from .commands.dispatcher import CommandContext, dispatch_command
 from .commands.parser import parse
 from .commands.registry import CommandRegistry
+from .commands.rules import register_rules_command
 from .commands.skills import register_skill_commands, register_skill_shortcut
 from .commands.ui import TextualUI
 from .compress import CompressionConfig, CompressionFailure, CompressionManager
@@ -31,6 +32,8 @@ from .instructions import default_user_dir, load_instructions
 from .mcp import ConfigError, McpConfig, McpManager
 from .notes import NotesManager
 from .recovery import recover_session
+from .rules.engine import RuleEngine
+from .rules.loader import RuleLoadError, load_rules
 from .security import load_policy
 from .session import ChatSession
 from .skills.install_tool import InstallSkill
@@ -277,6 +280,18 @@ class ZXCodeApp(App):
         self.cancel_token = CancelToken()
         self.config = AgentConfig(cancel_token=self.cancel_token)
         self.security = load_policy(Path.cwd(), self.config.security_mode)
+        self.rule_load_error = None
+        try:
+            rules = load_rules(Path.cwd())
+        except RuleLoadError as error:
+            self.rule_load_error = str(error)
+            rules = []
+        self.rule_engine = RuleEngine(
+            rules,
+            root=Path.cwd(),
+            confirm=self.confirm_tool,
+            security=self.security,
+        )
         self.compressor = compressor or CompressionManager(
             Path.cwd(), CompressionConfig(), client=self.client
         )
@@ -309,6 +324,7 @@ class ZXCodeApp(App):
             context=ToolContext(Path.cwd(), self.confirm_tool, self.security),
             compressor=self.compressor,
             skill_manager=self.skill_manager,
+            rule_engine=self.rule_engine,
         )
         self.session = ChatSession(settings.model)
         self.store = store or SessionStore(default_sessions_dir())
@@ -324,6 +340,7 @@ class ZXCodeApp(App):
         )
         register_builtins(self.command_registry, self.command_context)
         register_skill_commands(self.command_registry, self.skill_manager)
+        register_rules_command(self.command_registry)
         loaded_instructions = load_instructions(Path.cwd())
         skill_index = self._skill_index_message()
         self.instruction_messages = [
@@ -378,6 +395,55 @@ class ZXCodeApp(App):
                 register_skill_shortcut(self.command_registry, meta)
         self._refresh_skill_index()
         return issues
+
+    def list_rules(self) -> None:
+        rules = self.rule_engine.list_rules()
+        if not rules:
+            self.notice("没有已加载的规则")
+            return
+        lines = [
+            f"{rule.id} | {rule.event}"
+            + (" | once" if rule.once else "")
+            + (" | async" if rule.async_ else "")
+            for rule in rules
+        ]
+        self.notice("已加载规则：\n" + "\n".join(lines))
+
+    def rule_detail(self, rule_id: str) -> None:
+        rule = self.rule_engine.get(rule_id)
+        if rule is None:
+            self.notice(f"未知规则：{rule_id}")
+            return
+        actions = ", ".join(
+            f"{action.type}({','.join(action.payload)})"
+            for action in rule.actions
+        )
+        condition = (
+            f"{rule.conditions.combinator}: "
+            + ", ".join(
+                f"{item.field} {item.op} {item.value}"
+                for item in rule.conditions.conditions
+            )
+            if rule.conditions
+            else "无条件"
+        )
+        self.notice(
+            f"{rule.id} | {rule.event}\n"
+            f"条件：{condition}\n"
+            f"动作：{actions or '（无）'}\n"
+            f"reject：{rule.reject or '（无）'}\n"
+            f"once：{rule.once} | async：{rule.async_} | "
+            f"timeout：{rule.timeout_seconds:g}s"
+        )
+
+    def reload_rules(self) -> None:
+        try:
+            rules = load_rules(Path.cwd())
+        except RuleLoadError as error:
+            self.notice(f"规则重载失败：{error}（保留旧规则）")
+            return
+        self.rule_engine.reload(rules)
+        self.notice(f"已重载 {len(rules)} 条规则")
 
     async def run_skill(self, name: str, args: str = "") -> None:
         meta = self.skill_manager.get(name)
@@ -446,6 +512,10 @@ class ZXCodeApp(App):
         self.query_one("#input", TextArea).focus()
         for issue in self.instruction_issues:
             self.notice(issue)
+        if self.rule_load_error:
+            self.notice(f"规则加载失败：{self.rule_load_error}")
+        await self.rule_engine.emit("system_startup", {})
+        await self.rule_engine.emit("session_start", {})
         if self.mcp_config_error:
             self.notice(f"MCP 配置错误：{self.mcp_config_error}")
         if self.mcp_manager.config.servers:
@@ -458,6 +528,12 @@ class ZXCodeApp(App):
                 self.notice(f"MCP server {item['server']} 连接失败：{item['error']}")
 
     async def on_unmount(self) -> None:
+        await self.rule_engine.emit("session_end", {})
+        await self.rule_engine.emit("system_exit", {})
+        try:
+            await asyncio.wait_for(self.rule_engine.drain(), timeout=5)
+        except (TimeoutError, asyncio.CancelledError):
+            pass
         task = self._mcp_task
         self._mcp_task = None
         if task is not None and not task.done():

@@ -64,6 +64,12 @@ class UIControl(Protocol):
 
     def rescan_skills(self) -> list: ...
 
+    def list_rules(self) -> None: ...
+
+    def rule_detail(self, rule_id: str) -> None: ...
+
+    def reload_rules(self) -> None: ...
+
 
 class TextualUI:
     """Textual adapter: delegates UIControl operations to a ZXCodeApp."""
@@ -197,3 +203,12 @@ class TextualUI:
 
     def rescan_skills(self) -> list:
         return self._app.rescan_skills()
+
+    def list_rules(self) -> None:
+        self._app.list_rules()
+
+    def rule_detail(self, rule_id: str) -> None:
+        self._app.rule_detail(rule_id)
+
+    def reload_rules(self) -> None:
+        self._app.reload_rules()

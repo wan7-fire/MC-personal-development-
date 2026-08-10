@@ -33,10 +33,12 @@ class ToolDispatcher:
         registry: ToolRegistry,
         executor: ToolExecutor,
         channel: EventChannel,
+        rule_engine=None,
     ) -> None:
         self.registry = registry
         self.executor = executor
         self.channel = channel
+        self.rule_engine = rule_engine
 
     async def dispatch(
         self,
@@ -133,6 +135,28 @@ class ToolDispatcher:
         tool = self.registry.get(call.name)
         tool_type = "read" if tool is None or tool.read_only else "write"
 
+        engine = self.rule_engine
+        if engine is not None:
+            decision = await engine.emit(
+                "pre_tool_use",
+                {
+                    "tool": call.name,
+                    "args": dict(call.arguments),
+                    "path": call.arguments.get("path"),
+                },
+            )
+            if decision.rejected:
+                await self._emit_start(call, tool_type, turn)
+                await self._emit_end(call, turn, 0, "error")
+                return ToolResult(
+                    False,
+                    error={
+                        "code": "rule_rejected",
+                        "message": decision.reason,
+                    },
+                    metadata={"call_id": call.id},
+                )
+
         blocked = await self._pre_hook(call, context, config, outcome)
         if blocked is not None:
             await self._emit_start(call, tool_type, turn)
@@ -144,6 +168,18 @@ class ToolDispatcher:
         result = await self.executor.execute(
             call.id, call.name, call.arguments, context
         )
+        if engine is not None:
+            await engine.emit(
+                "post_tool_use",
+                {
+                    "tool": call.name,
+                    "args": dict(call.arguments),
+                    "success": result.success,
+                    "error": (result.error or {}).get("message", "")
+                    if result.error
+                    else "",
+                },
+            )
         duration_ms = int((monotonic() - started) * 1000)
         await self._emit_end(call, turn, duration_ms, _status(result))
         return self._post_hook(call, result)

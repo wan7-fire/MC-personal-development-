@@ -46,6 +46,7 @@ class AgentLoop:
         context: ToolContext | None = None,
         compressor: CompressionManager | None = None,
         skill_manager=None,
+        rule_engine=None,
     ) -> None:
         self.client = client
         self.registry = registry
@@ -54,6 +55,7 @@ class AgentLoop:
         self.context = context or ToolContext()
         self.compressor = compressor
         self.skill_manager = skill_manager
+        self.rule_engine = rule_engine
 
     @property
     def max_turns(self) -> int:
@@ -65,7 +67,31 @@ class AgentLoop:
         model: str,
         channel: EventChannel,
     ) -> AgentComplete:
-        completed, turn = await self._run(messages, model, channel)
+        engine = self.rule_engine
+        turn = 0
+        completed = None
+        if engine is not None:
+            await engine.emit("turn_start", {"turn": turn})
+            pre = await engine.emit(
+                "pre_message", {"message": _last_user_text(messages)}
+            )
+            if pre.injected:
+                messages = [
+                    *(
+                        {"role": "system", "content": text}
+                        for text in pre.injected
+                    ),
+                    *messages,
+                ]
+        try:
+            completed, turn = await self._run(messages, model, channel)
+        finally:
+            if engine is not None:
+                await engine.emit(
+                    "post_message",
+                    {"message": completed.text if completed is not None else ""},
+                )
+                await engine.emit("turn_end", {"turn": turn})
         await channel.emit(
             Event(
                 type=EventType.LOOP_END,
@@ -87,7 +113,9 @@ class AgentLoop:
     ) -> tuple[AgentComplete, int]:
         config = self.config
         state = LoopStateMachine()
-        dispatcher = ToolDispatcher(self.registry, self.executor, channel)
+        dispatcher = ToolDispatcher(
+            self.registry, self.executor, channel, self.rule_engine
+        )
         terminator = LoopTerminator(
             replace(config.terminator_config, max_turns=config.max_turns)
         )

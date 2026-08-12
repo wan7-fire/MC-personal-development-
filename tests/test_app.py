@@ -153,6 +153,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
                 "Grep",
                 "LoadSkill",
                 "InstallSkill",
+                "SpawnWorker",
             },
         )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from time import monotonic
 from uuid import uuid4
@@ -25,6 +26,7 @@ from .commands.registry import CommandRegistry
 from .commands.rules import register_rules_command
 from .commands.skills import register_skill_commands, register_skill_shortcut
 from .commands.ui import TextualUI
+from .commands.workers import register_workers_command
 from .compress import CompressionConfig, CompressionFailure, CompressionManager
 from .config import AgentConfig
 from .events import EventChannel, EventType
@@ -52,6 +54,9 @@ from .tools import (
     ToolRegistry,
     WriteFile,
 )
+from .workers.loader import load_roles
+from .workers.manager import TaskManager
+from .workers.tool import SpawnWorker
 
 
 # confirm_tool returns one of these only when the user explicitly approved the
@@ -278,7 +283,12 @@ class ZXCodeApp(App):
                 self.mcp_manager = McpManager(McpConfig())
         self._mcp_task: asyncio.Task | None = None
         self.cancel_token = CancelToken()
-        self.config = AgentConfig(cancel_token=self.cancel_token)
+        self.config = AgentConfig(
+            cancel_token=self.cancel_token,
+            workers_verifier_enabled=(
+                os.environ.get("ZXCODE_ENABLE_VERIFIER", "").strip() == "1"
+            ),
+        )
         self.security = load_policy(Path.cwd(), self.config.security_mode)
         self.rule_load_error = None
         try:
@@ -291,6 +301,29 @@ class ZXCodeApp(App):
             root=Path.cwd(),
             confirm=self.confirm_tool,
             security=self.security,
+        )
+        self.worker_roles = load_roles(
+            Path.cwd(),
+            user_dir=default_user_dir(),
+            builtin_root=Path(__file__).resolve().parent / "workers" / "builtin",
+            include_verifier=self.config.workers_verifier_enabled,
+        )
+        self.worker_manager = TaskManager(
+            roles=self.worker_roles,
+            root=Path.cwd(),
+            client=self.client,
+            registry=self.registry,
+            config=self.config,
+            rule_engine=self.rule_engine,
+            history_provider=lambda: self.session.messages,
+            model_provider=lambda: self.session.model,
+            parent_tool_names_provider=lambda: (
+                self.skill_manager.active_tool_names()
+                if self.skill_manager is not None
+                else None
+            ),
+            on_complete=self._on_worker_complete,
+            foreground_timeout=30.0,
         )
         self.compressor = compressor or CompressionManager(
             Path.cwd(), CompressionConfig(), client=self.client
@@ -316,6 +349,7 @@ class ZXCodeApp(App):
         self.registry.register(
             InstallSkill(self.skill_manager, on_installed=self.rescan_skills)
         )
+        self.registry.register(SpawnWorker(self.worker_manager))
         self.agent = agent or AgentLoop(
             self.client,
             self.registry,
@@ -341,6 +375,7 @@ class ZXCodeApp(App):
         register_builtins(self.command_registry, self.command_context)
         register_skill_commands(self.command_registry, self.skill_manager)
         register_rules_command(self.command_registry)
+        register_workers_command(self.command_registry)
         loaded_instructions = load_instructions(Path.cwd())
         skill_index = self._skill_index_message()
         self.instruction_messages = [
@@ -444,6 +479,55 @@ class ZXCodeApp(App):
             return
         self.rule_engine.reload(rules)
         self.notice(f"已重载 {len(rules)} 条规则")
+
+    def _on_worker_complete(self, task) -> None:
+        duration = (
+            int((task.finished_at or 0) - task.started_at)
+            if task.started_at
+            else 0
+        )
+        summary = (task.result or task.error or "")[:200]
+        self.notice(
+            f"[子工作者完成] 任务 {task.id} | {task.role} | {task.status}\n"
+            f"结果：{summary}\n"
+            f"token：{task.token_usage} | 耗时：{duration}s"
+        )
+
+    def list_workers(self) -> None:
+        tasks = self.worker_manager.list_tasks()
+        if not tasks:
+            self.notice("没有后台任务")
+            return
+        lines = [
+            f"{task.id} | {task.role} | {task.mode} | {task.status} | "
+            f"token {task.token_usage}"
+            for task in tasks
+        ]
+        self.notice("后台任务：\n" + "\n".join(lines))
+
+    def worker_detail(self, task_id: str) -> None:
+        task = self.worker_manager.get(task_id)
+        if task is None:
+            self.notice(f"未知任务：{task_id}")
+            return
+        duration = (
+            int((task.finished_at or 0) - task.started_at)
+            if task.started_at
+            else 0
+        )
+        self.notice(
+            f"{task.id} | {task.role} | {task.mode}\n"
+            f"状态：{task.status}\n"
+            f"结果：{task.result or '（无）'}\n"
+            f"错误：{task.error or '（无）'}\n"
+            f"token：{task.token_usage} | 耗时：{duration}s"
+        )
+
+    def kill_worker(self, task_id: str) -> None:
+        if self.worker_manager.kill(task_id):
+            self.notice(f"已终止任务 {task_id}")
+        else:
+            self.notice(f"未知任务：{task_id}")
 
     async def run_skill(self, name: str, args: str = "") -> None:
         meta = self.skill_manager.get(name)

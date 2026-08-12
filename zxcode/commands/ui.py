@@ -70,6 +70,12 @@ class UIControl(Protocol):
 
     def reload_rules(self) -> None: ...
 
+    def list_workers(self) -> None: ...
+
+    def worker_detail(self, task_id: str) -> None: ...
+
+    def kill_worker(self, task_id: str) -> None: ...
+
 
 class TextualUI:
     """Textual adapter: delegates UIControl operations to a ZXCodeApp."""
@@ -212,3 +218,12 @@ class TextualUI:
 
     def reload_rules(self) -> None:
         self._app.reload_rules()
+
+    def list_workers(self) -> None:
+        self._app.list_workers()
+
+    def worker_detail(self, task_id: str) -> None:
+        self._app.worker_detail(task_id)
+
+    def kill_worker(self, task_id: str) -> None:
+        self._app.kill_worker(task_id)
